@@ -8,6 +8,7 @@ class Planner:
         self.client = client
 
     def create_plan(self, state):
+        state.retry_count += 1
         response = self.client.chat.completions.create(
             model="deepseek-chat",
             messages=[
