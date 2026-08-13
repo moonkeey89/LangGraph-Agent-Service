@@ -8,6 +8,8 @@ from response_generator import ResponseGenerator
 from state import AgentState
 from graph import AgentGraph
 
+from router import router
+
 
 load_dotenv()
 
@@ -59,12 +61,18 @@ graph.add_edge(
     "executor"
 )
 
+#
+# graph.add_edge(
+#     "executor",
+#     "response"
+# )
+from router import router
 
-graph.add_edge(
+
+graph.add_conditional_edge(
     "executor",
-    "response"
+    router
 )
-
 
 graph.add_edge(
     "response",
@@ -90,6 +98,6 @@ while True:
 
     print("\nAgent回答:")
 
-    print("git change test??")
+    # print("git change test??")
 
     print(final_state.final_answer)

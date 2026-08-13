@@ -5,6 +5,7 @@ class AgentGraph:
         self.nodes = {}
 
         self.edges = {}
+        self.conditional_edges = {}
 
 
     # 添加节点
@@ -18,6 +19,12 @@ class AgentGraph:
 
         self.edges[start]=end
 
+    def add_conditional_edge(
+            self,
+            start,
+            router
+    ):
+        self.conditional_edges[start] = router
 
     # 运行Graph
     def run(self,state):
@@ -38,9 +45,15 @@ class AgentGraph:
             # 执行节点
             state=node(state)
 
+            if current in self.conditional_edges:
 
-            # 找下一节点
-            current=self.edges.get(current)
+                router = self.conditional_edges[current]
+
+                current = router(state)
+
+            else:
+
+                current = self.edges.get(current)
 
 
         return state

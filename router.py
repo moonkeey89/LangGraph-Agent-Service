@@ -1,5 +1,21 @@
-def decide_next_step(state):
+# def decide_next_step(state):
+#
+#
+#     if state.status=="success":
+#
+#         return "response"
+#
+#
+#     elif state.status=="failed":
+#
+#         return "planner"
+#
+#
+#     else:
+#
+#         return "planner"
 
+def router(state):
 
     if state.status=="success":
 
@@ -7,10 +23,5 @@ def decide_next_step(state):
 
 
     elif state.status=="failed":
-
-        return "planner"
-
-
-    else:
 
         return "planner"

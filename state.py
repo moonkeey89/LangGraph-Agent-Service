@@ -17,4 +17,7 @@ class AgentState:
         # 当前Agent状态
         self.status = "start"
 
+        # 下一步动作
+        self.next_step = ""
+
         self.final_answer = ""

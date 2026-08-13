@@ -21,3 +21,9 @@
                                 conditional routing
                                 fallback策略
                                 human intervention
+
+6、State 是 Agent 的核心数据载体，记录智能体当前所处的环境和任务信息；Node 是改变 State 的执行模块，
+    负责完成具体能力；Edge 是连接 Node 的控制规则，决定 State 下一步流向哪里；return state 则保证每
+    一次 Node 执行后的状态变化能够继续传递。四者结合后，Agent 就从简单的“输入问题→输出答案”的模型调用，
+    变成了一个能够规划、执行、观察结果并根据状态调整行为的动态系统。这也是 LangGraph 设计 Agent 工作流
+    的核心思想。
