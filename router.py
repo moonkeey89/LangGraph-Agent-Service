@@ -1,3 +1,8 @@
+
+def entry_router(state):
+
+    return state.next_step
+
 def router(state):
 
     # 执行成功

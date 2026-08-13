@@ -29,7 +29,7 @@ class AgentGraph:
     # 运行Graph
     def run(self,state):
 
-        current="planner"
+        current="router"
 
 
         while current:

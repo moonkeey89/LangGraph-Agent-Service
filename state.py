@@ -23,4 +23,6 @@ class AgentState:
         # 循环控制
         self.retry_count = 0
 
+        # self.next_step=""
+
         self.final_answer = ""

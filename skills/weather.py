@@ -53,5 +53,5 @@ def get_weather(city):
 
     }
 
-    raise Exception("接口错误")
+    # raise Exception("接口错误")
     return weather_data[city]

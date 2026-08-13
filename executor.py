@@ -2,6 +2,7 @@ import json
 
 from skills.weather import get_weather
 from skills.attraction import search_attraction
+from skills.calculator import  calculate
 
 
 class Executor:
@@ -12,12 +13,14 @@ class Executor:
         self.tools = {
 
             "get_weather": get_weather,
-
-            "search_attraction": search_attraction
+            "search_attraction": search_attraction,
+            "calculate": calculate
 
         }
 
     def execute(self, state):
+        print("Executor收到Plan:")
+        print(state.plan)
 
         results = []
 
