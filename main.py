@@ -13,6 +13,7 @@ from router import entry_router
 
 from router import router
 
+from registry import ToolRegistry
 
 load_dotenv()
 
@@ -27,11 +28,30 @@ router_node=RouterNode(client)
 # 创建Graph
 graph = AgentGraph()
 
+#创建注册表
+registry = ToolRegistry()
+from skills.weather import get_weather
+from skills.attraction import search_attraction
+from skills.calculator import calculate
+registry.register(
+    "get_weather",
+    get_weather
+)
+
+registry.register(
+    "search_attraction",
+    search_attraction
+)
+
+registry.register(
+    "calculate",
+    calculate
+)
 
 # 创建模块
 planner = Planner(client)
 
-executor = Executor()
+executor = Executor(registry)
 
 generator = ResponseGenerator(client)
 

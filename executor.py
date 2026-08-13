@@ -8,15 +8,9 @@ from skills.calculator import  calculate
 class Executor:
 
 
-    def __init__(self):
+    def __init__(self, registry):
+        self.registry = registry
 
-        self.tools = {
-
-            "get_weather": get_weather,
-            "search_attraction": search_attraction,
-            "calculate": calculate
-
-        }
 
     def execute(self, state):
         print("Executor收到Plan:")
@@ -30,10 +24,9 @@ class Executor:
 
             for task in tasks:
                 tool_name = task["tool"]
-
                 arguments = task["arguments"]
 
-                tool = self.tools[tool_name]
+                tool = self.registry.get_tool(tool_name)
 
                 result = tool(**arguments)
 
