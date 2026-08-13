@@ -1,0 +1,23 @@
+1、Agent通过LLM进行任务理解和决策，开发者将Python函数封装成Skill，
+    并通过Tool描述暴露给LLM。LLM根据用户任务选择合适Tool，Agent运
+    行时负责执行对应Skill，并将执行结果反馈给LLM完成最终响应。
+    Agent目的是将复杂目标拆解成多个可执行子任务，并协调不同能力完成目标
+2、Agent 是一种基于大语言模型的任务执行系统，通过 LLM 进行任务理解
+    和规划，通过 Tool Calling 调用外部 Skill 完成具体操作，并根据
+    执行结果继续推理，最终完成复杂任务。Skill=真正干活的Python函数；Tool=给LLM看的接口描述
+
+3、Agent 第一次接收用户请求时，程序会将当前可用的 Skills（Tools）的名称、功能描述以及参数格
+    式，通过 Tool Calling 接口一起发送给大语言模型。LLM 并不知道 Python 中真实存在的函数，而是根
+    据这些工具描述和用户需求进行语义判断，选择最合适的工具并生成调用参数。随后由程序真正执行对应 Skill，
+    并将执行结果重新反馈给 LLM，形成 Reasoning → Action → Observation 的 ReAct 循环。
+
+4、State就是记录Agent当前“脑中所有重要信息”的数据结构。实际上就是一个 Agent 的“短期工作记忆”，Memory = 人的大脑记忆
+    State = 人当前桌面上的工作资料，类似一种进度管理。State不是简单的数据保存，而是Agent所有节点之间共享的“动态上下文”。
+    LangGraph通过State连接不同Node，让Agent能够根据当前状态动态决定下一步行动。这也是从普通LLM应用走向真正Agent系统的关键一步。
+
+5、“如何避免 Agent 陷入无限循环？”State记录执行状态
+                                retry次数限制
+                                error记录
+                                conditional routing
+                                fallback策略
+                                human intervention
