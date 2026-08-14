@@ -29,3 +29,13 @@
     的核心思想。
 
 7、Router 决定“走哪条路”，Planner 决定“具体怎么做”，Executor 负责“真正执行”。
+
+8、LLM负责：理解任务、推理、决策、生成回答。
+Tool / Skill负责：把确定性任务交给程序执行。
+Tool Calling负责：让 LLM 决定什么时候调用哪个 Tool，以及传递什么参数。
+Planner负责：把复杂任务分解成执行步骤。
+Executor负责：真正执行这些步骤。
+State负责：在 Agent Workflow 中保存任务状态。
+Router负责：控制不同任务进入不同工作流。
+Memory负责：保存跨轮次有价值的信息。
+Graph负责：描述 Agent 的执行流程和循环。
