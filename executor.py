@@ -1,10 +1,5 @@
 import json
 
-from skills.weather import get_weather
-from skills.attraction import search_attraction
-from skills.calculator import  calculate
-
-
 class Executor:
 
 

@@ -105,6 +105,45 @@ tools_schema = [
 
             }
         }
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "save_memory",
+            "description": "保存用户希望长期记住的信息，例如用户姓名、兴趣、偏好等。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "记忆的名称，例如name、favorite_food"
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "需要保存的信息"
+                    }
+                },
+                "required": ["key", "value"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_memory",
+            "description": "查询已经保存的用户信息。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "需要查询的记忆名称，例如name、favorite_food"
+                    }
+                },
+                "required": ["key"]
+            }
+        }
     }
 
 ]

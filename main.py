@@ -28,6 +28,8 @@ router_node=RouterNode(client)
 
 # 创建Graph
 graph = AgentGraph()
+from memory import Memory
+memory = Memory()
 
 #创建注册表
 registry = ToolRegistry()
@@ -47,6 +49,16 @@ registry.register(
 registry.register(
     "calculate",
     calculate
+)
+
+registry.register(
+    "save_memory",
+    memory.save_memory
+)
+
+registry.register(
+    "get_memory",
+    memory.get_memory
 )
 
 # 创建模块
