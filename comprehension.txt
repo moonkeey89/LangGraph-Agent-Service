@@ -32,7 +32,7 @@
 
 8、LLM负责：理解任务、推理、决策、生成回答。
 Tool / Skill负责：把确定性任务交给程序执行。
-Tool Calling负责：让 LLM 决定什么时候调用哪个 Tool，以及传递什么参数。
+Tool Calling负责：让 LLM 决定什么时候调用git 哪个 Tool，以及传递什么参数。
 Planner负责：把复杂任务分解成执行步骤。
 Executor负责：真正执行这些步骤。
 State负责：在 Agent Workflow 中保存任务状态。

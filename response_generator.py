@@ -29,18 +29,18 @@ class ResponseGenerator:
                     "content": f"""
     用户任务：
 
-    {state.task}
+    {state["task"]}
 
     工具执行结果：
 
-    {state.results}
+    {state["results"]}
 
     请生成最终回答。
     """
                 }
             ]
         )
-        state.final_answer = response.choices[0].message.content
+        state["final_answer"] = response.choices[0].message.content
 
         return state
         # return response.choices[0].message.content

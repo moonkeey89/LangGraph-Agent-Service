@@ -15,7 +15,7 @@ class Planner:
                 },
                 {
                     "role": "user",
-                    "content": state.task
+                    "content": state["task"]
                 }
             ],
             tools=tools_schema,
@@ -29,7 +29,7 @@ class Planner:
 
         # 没有调用工具
         if not message.tool_calls:
-            state.plan = []
+            state["plan"] = []
             state.status = "success"
             return state
 
@@ -42,6 +42,6 @@ class Planner:
                 "arguments": json.loads(tool_call.function.arguments)
             })
 
-        state.plan = json.dumps(plan, ensure_ascii=False, indent=4)
+        state["plan"] = json.dumps(plan, ensure_ascii=False, indent=4)
 
         return state

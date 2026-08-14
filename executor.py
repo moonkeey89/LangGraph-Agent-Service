@@ -9,13 +9,13 @@ class Executor:
 
     def execute(self, state):
         print("Executor收到Plan:")
-        print(state.plan)
+        print(state["plan"])
 
         results = []
 
         try:
 
-            tasks = json.loads(state.plan)
+            tasks = json.loads(state["plan"])
 
             for task in tasks:
                 tool_name = task["tool"]
@@ -32,17 +32,17 @@ class Executor:
                     }
                 )
 
-            state.results = results
+            state["results"] = results
 
             # 执行成功
-            state.status = "success"
+            # state.status = "success"
 
 
         except Exception as e:
 
-            state.status = "failed"
+            # state.status = "failed"
 
-            state.results.append(
+            state["results"].append(
                 {
                     "error": str(e)
                 }
