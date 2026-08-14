@@ -14,6 +14,7 @@ from router import entry_router
 from router import router
 
 from registry import ToolRegistry
+from tools_schema import tools_schema
 
 load_dotenv()
 
