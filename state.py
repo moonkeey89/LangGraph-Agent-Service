@@ -1,28 +1,14 @@
-class AgentState:
+from typing import TypedDict, Annotated
 
-    def __init__(self, task=""):
+from langchain_core.messages import BaseMessage
 
-        # 用户任务
-        self.task = task
+from langgraph.graph.message import add_messages
 
-        # Planner生成的计划
-        self.plan = []
 
-        # 工具执行结果
-        self.results = []
 
-        # 历史消息
-        self.history = []
+class AgentState(TypedDict):
 
-        # 当前Agent状态
-        self.status = "start"
-
-        # 下一步动作
-        self.next_step = ""
-
-        # 循环控制
-        self.retry_count = 0
-
-        # self.next_step=""
-
-        self.final_answer = ""
+    messages: Annotated[
+        list[BaseMessage],
+        add_messages
+    ]
