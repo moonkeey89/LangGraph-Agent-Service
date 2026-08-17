@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-agent-learning"
+version = "0.1.0"
+description = "A teaching project for building a LangGraph ReAct agent."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain-core>=1.5,<2",
+    "langchain-openai>=1.5,<2",
+    "langgraph>=1.2,<2",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.15,<3",
+]
+
+[project.scripts]
+ai-agent-learning = "ai_agent_learning.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

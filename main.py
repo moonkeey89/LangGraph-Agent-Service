@@ -1,26 +1,5 @@
-from react_graph import app
-
-from langchain_core.messages import HumanMessage
+from ai_agent_learning.cli import main
 
 
-
-while True:
-
-
-    user=input("请输入:")
-
-
-    result=app.invoke(
-        {
-            "messages":[
-                HumanMessage(
-                    content=user
-                )
-            ]
-        }
-    )
-
-
-    print(
-        result["messages"][-1].content
-    )
+if __name__ == "__main__":
+    raise SystemExit(main())
