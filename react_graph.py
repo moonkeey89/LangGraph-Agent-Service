@@ -8,11 +8,7 @@ from agent_node import AgentNode
 
 from tool_node import tool_node
 
-from tools import (
-    get_weather,
-    calculate,
-    search_attraction
-)
+from tools import TOOLS
 
 
 
@@ -22,13 +18,7 @@ graph = StateGraph(
 
 
 
-agent = AgentNode(
-    [
-        get_weather,
-        calculate,
-        search_attraction
-    ]
-)
+agent = AgentNode(TOOLS)
 
 
 

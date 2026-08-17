@@ -1,18 +1,6 @@
 from langgraph.prebuilt import ToolNode
 
-
-from tools import (
-    get_weather,
-    calculate,
-    search_attraction
-)
+from tools import TOOLS
 
 
-tools=[
-    get_weather,
-    calculate,
-    search_attraction
-]
-
-
-tool_node=ToolNode(tools)
+tool_node = ToolNode(TOOLS)
