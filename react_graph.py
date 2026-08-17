@@ -6,6 +6,10 @@ from state import AgentState
 
 from agent_node import AgentNode
 
+from llm_factory import create_llm
+
+from settings import Settings
+
 from tool_node import tool_node
 
 from tools import TOOLS
@@ -18,7 +22,12 @@ graph = StateGraph(
 
 
 
-agent = AgentNode(TOOLS)
+settings = Settings()
+
+llm = create_llm(settings)
+
+
+agent = AgentNode(llm, TOOLS)
 
 
 
