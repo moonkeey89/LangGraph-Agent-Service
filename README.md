@@ -41,7 +41,6 @@ Copy-Item .env.example .env
 DEEPSEEK_API_KEY=your-real-key
 ```
 
-`.env` 已被 Git 忽略，不要提交真实密钥。
 
 ## 运行
 
