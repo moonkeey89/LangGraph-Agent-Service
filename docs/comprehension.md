@@ -596,7 +596,7 @@ START → AgentNode → tools_condition            │
 | `ResponseGenerator` | 工具执行后再次调用 AgentNode | 同一个 LLM 节点生成最终回答 |
 | 自研 `AgentState` | TypedDict State + reducer | 当前只保留 messages |
 | 自研 `AgentGraph` | LangGraph `StateGraph` | 节点、边、条件分支和循环 |
-| `Memory` | 当前没有接入 | 尚未被 checkpointer 或长期 Store 替代 |
+| `Memory` | `InMemorySaver`（仅短期部分） | 当前只实现按 thread_id 保存图状态；长期 Memory 仍未接入 |
 
 需要特别注意：
 
@@ -613,11 +613,14 @@ main.py
    ↓
 ai_agent_learning.cli
    ↓
-Settings → LLM Factory → build_graph
-                         ↓
-                  AgentNode ↔ ToolNode
-                              ↓
-                        Tool → Skill
+Settings → LLM Factory ───────────────┐
+InMemorySaver ────────────────────────┤
+                                     ↓
+                         build_graph → compile(checkpointer)
+                                     ↓
+用户消息 + thread_id → AgentNode ↔ ToolNode
+                                     ↓
+                               Tool → Skill
 ```
 
 旧手写架构已经隔离到：
@@ -778,9 +781,9 @@ AgentNode 和 ToolNode 使用同一份 Tool 集合
 - 统一工具错误结构；
 - 超时、重试和 fallback。
 
-### 15.3 第三优先级：多轮会话和 Memory
+### 15.3 已完成：基于 Checkpointer 的多轮短期会话
 
-当前 CLI 每次调用都创建全新的输入 State，没有配置 checkpointer 和 `thread_id`，因此没有真正的多轮短期记忆。
+当前 CLI 在启动时确定一个稳定的 `thread_id`，在创建应用时使用 `InMemorySaver`，并把它传给 `graph.compile(checkpointer=...)`。循环中的每次 `graph.invoke()` 都携带同一份 `thread_id` 配置，因此 LangGraph 可以在新一轮执行前恢复该线程的历史 State。
 
 需要区分：
 
@@ -789,11 +792,13 @@ State
     当前一次图执行中的共享状态
 
 Short-term Memory
-    同一个对话线程中的历史，可由 LangGraph checkpointer 保存
+    同一个对话线程中的历史，由当前 InMemorySaver 在进程内保存
 
 Long-term Memory
     跨线程、跨进程保存的用户偏好或事实，需要 Store 或数据库
 ```
+
+这里的边界很重要：当前 Checkpointer 让同一进程内的连续对话具有上下文，但程序重启后数据会消失，也不会把一个线程中的信息自动共享给另一个线程。
 
 ### 15.4 第四优先级：可靠性和循环控制
 
@@ -891,8 +896,14 @@ Conditional Edge
 StateGraph
     编排 Node、Edge、循环和结束条件
 
-Memory
-    保存跨步骤、跨轮次或跨会话的有价值信息
+Checkpointer
+    按 thread_id 保存和恢复图执行产生的 State 快照
+
+Short-term Memory
+    当前线程中可被后续轮次读取的历史消息和运行状态
+
+Long-term Memory
+    跨线程或跨进程长期保存的用户事实、偏好和知识
 
 ReAct
     Reasoning → Action → Observation 的循环执行方式
@@ -900,4 +911,95 @@ ReAct
 
 最后，用一句话描述当前目标架构：
 
-> LLM 在 AgentNode 中根据消息和 Tool 描述进行决策；ToolNode 执行由 LangChain Tool 暴露的 Skill；执行结果以 ToolMessage 写回 State；LangGraph 根据条件边持续编排这个 ReAct 循环，直到模型生成最终回答。
+> CLI 用稳定的 thread_id 调用已配置 Checkpointer 的 LangGraph；图先恢复当前线程的 State，再由 AgentNode 根据消息和 Tool 描述进行决策；ToolNode 执行由 LangChain Tool 暴露的 Skill；结果以 ToolMessage 合并回 State；LangGraph 持续编排 ReAct 循环并保存新的 Checkpoint，直到模型生成最终回答。
+
+---
+
+## 17. LangGraph Checkpoint 学习流程
+
+### 17.1 先理解它解决的问题
+
+没有 Checkpointer 时，每次调用只看到本次传入的消息：
+
+```text
+第一轮 invoke({messages: [“我的名字是小明”]}) → 本轮 State → 执行结束
+第二轮 invoke({messages: [“我叫什么名字？”]}) → 新的 State → 看不到第一轮
+```
+
+接入 Checkpointer 后，LangGraph 会用 `thread_id` 找回上次保存的 State：
+
+```text
+thread_id=user_001
+    第一轮：载入空状态 → 合并“我的名字是小明” → 执行 → 保存 Checkpoint
+    第二轮：恢复第一轮状态 → 合并“我叫什么名字？” → 执行 → 保存新 Checkpoint
+
+thread_id=user_002
+    没有 user_001 的 Checkpoint → 从自己的状态开始
+```
+
+因此，真正被 Agent “记住”的不是 `thread_id` 字符串本身。`thread_id` 是查找会话状态的键，历史消息实际保存在 Checkpointer 中。
+
+### 17.2 当前代码中每一层的职责
+
+```text
+cli.py
+    创建 InMemorySaver
+    在程序启动时确定 thread_id
+    每轮通过 config 把同一个 thread_id 传给 graph.invoke()
+
+agent/graph.py
+    接收 Checkpointer
+    保留 AgentNode ↔ ToolNode 的 ReAct 图结构
+    调用 graph.compile(checkpointer=checkpointer)
+
+agent/state.py
+    用 add_messages reducer 定义 messages 的合并规则
+    新消息追加到恢复出的历史消息，而不是整体覆盖
+
+AgentNode
+    读取合并后的 messages，让 LLM 基于当前线程上下文决策
+
+ToolNode
+    按原有方式执行工具并生成 ToolMessage
+
+InMemorySaver
+    按 thread_id 隔离、保存和恢复图状态
+```
+
+AgentNode 和 ToolNode 不需要自己读写 Checkpoint。状态恢复和保存发生在编译后的 LangGraph 运行时边界，这正是 Checkpointer 属于“编排基础设施”而不是业务逻辑的原因。
+
+### 17.3 一轮对话的完整调用链
+
+```text
+程序启动
+  → create_agent_app()
+  → 创建 LLM
+  → 创建 InMemorySaver
+  → build_graph(..., checkpointer)
+  → graph.compile(checkpointer=checkpointer)
+
+进入 CLI
+  → 用户输入或使用默认 thread_id（循环期间保持不变）
+  → 用户输入一条新消息
+  → graph.invoke(
+        {messages: [HumanMessage]},
+        config={configurable: {thread_id: ...}}
+    )
+  → Checkpointer 按 thread_id 恢复历史 AgentState
+  → add_messages 把新 HumanMessage 合并进 messages
+  → AgentNode 调用 LLM
+  → 若有 tool_calls：ToolNode → LangChain Tool → Skill
+  → ToolMessage 合并回 messages → 再次进入 AgentNode
+  → 输出最终 AIMessage
+  → Checkpointer 保存该 thread_id 的最新 State
+  → CLI 打印回答并等待下一轮
+```
+
+### 17.4 学习时应能回答的判断题
+
+- `messages` 字段存在，不代表天然具有跨请求记忆；还需要 Checkpointer 和稳定的 `thread_id`。
+- 每轮生成新的 `thread_id`，相当于每轮开启新会话，无法恢复上一轮状态。
+- 两个用户误用同一个 `thread_id`，会共享同一份会话状态，因此生产系统必须正确生成和鉴权会话 ID。
+- `add_messages` 决定新旧消息怎样合并；没有正确 reducer 时，新输入可能覆盖历史列表。
+- `InMemorySaver` 只适合当前教学阶段和单进程测试；进程退出后不会保留数据。
+- Checkpoint 保存图状态，长期 Memory 则解决跨会话的事实、偏好与知识沉淀，两者不能混为一谈。

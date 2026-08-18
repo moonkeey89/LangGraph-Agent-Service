@@ -7,9 +7,10 @@
 ```text
 .env → Settings → LLM Factory → AgentNode
                                   ↓
-用户 → LangGraph → AgentNode → ToolNode → LangChain Tool → Skill
-                         ↑            │
-                         └─ ToolMessage┘
+用户 + thread_id → LangGraph → AgentNode → ToolNode → LangChain Tool → Skill
+                         ↑      ↑            │
+                         │      └─ ToolMessage┘
+                         └─ InMemorySaver（按 thread_id 恢复/保存 State）
 ```
 
 - `skills`：真正的业务能力，不依赖 LangChain 或 LangGraph。
@@ -17,6 +18,7 @@
 - `AgentNode`：调用绑定 Tools 的 LLM，负责决策。
 - `ToolNode`：执行 LLM 生成的 Tool Calls。
 - `StateGraph`：编排 AgentNode、ToolNode、条件路由和 ReAct 循环。
+- `InMemorySaver`：按 `thread_id` 保存进程内 Checkpoint，为连续会话恢复短期状态。
 - `legacy`：早期手写 Agent 代码，不进入当前运行链。
 
 ## 环境要求
@@ -54,7 +56,9 @@ DEEPSEEK_API_KEY=your-real-key
 .venv\Scripts\python -m ai_agent_learning
 ```
 
-输入 `exit` 或 `quit` 退出。
+程序启动后先输入会话 ID；直接回车会使用 `default`。一次进程运行期间，同一会话 ID 会恢复之前的消息，不同会话 ID 的状态相互隔离。输入 `exit` 或 `quit` 退出。
+
+当前使用进程内 Checkpointer，程序退出后状态会丢失；它不是数据库或长期记忆。
 
 ## 测试
 
@@ -62,7 +66,7 @@ DEEPSEEK_API_KEY=your-real-key
 .venv\Scripts\python -m unittest discover -s tests -t . -v
 ```
 
-默认测试使用 Fake/Mock LLM，不会请求 DeepSeek API。
+默认测试使用 Fake/Mock LLM，不会请求 DeepSeek API，并覆盖同会话恢复、不同会话隔离及原有工具调用循环。
 
 ## 项目结构
 
@@ -88,9 +92,9 @@ docs/                   # 学习文档
 
 ## 当前范围
 
-当前项目只覆盖基础 LangGraph ReAct Agent 工程结构，暂未实现：
+当前项目覆盖基础 LangGraph ReAct Agent 工程结构和进程内短期会话记忆，暂未实现：
 
-- Memory/checkpointer
+- 持久化 Checkpointer 与长期 Memory
 - RAG
 - FastAPI
 - Multi-Agent

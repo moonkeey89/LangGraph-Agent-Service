@@ -1,6 +1,7 @@
 import unittest
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
 from ai_agent_learning.agent import build_graph
 from ai_agent_learning.tools import TOOLS
@@ -43,6 +44,34 @@ class ToolCallingModel:
         return AIMessage(content=f"计算结果是 {tool_message.content}")
 
 
+class NameMemoryModel:
+    def bind_tools(self, _tools):
+        return self
+
+    def invoke(self, messages):
+        last_human_message = next(
+            message
+            for message in reversed(messages)
+            if isinstance(message, HumanMessage)
+        )
+
+        if "我的名字是小明" in last_human_message.content:
+            return AIMessage(content="好的，我记住了，你的名字是小明。")
+
+        if "我叫什么名字" in last_human_message.content:
+            knows_name = any(
+                isinstance(message, HumanMessage)
+                and "我的名字是小明" in message.content
+                for message in messages[:-1]
+            )
+            if knows_name:
+                return AIMessage(content="你的名字是小明。")
+
+            return AIMessage(content="我不知道你的名字。")
+
+        return AIMessage(content="好的。")
+
+
 class ReactGraphTests(unittest.TestCase):
     def test_graph_structure_is_unchanged(self):
         app = build_graph(DirectAnswerModel(), TOOLS)
@@ -71,10 +100,11 @@ class ReactGraphTests(unittest.TestCase):
 
     def test_graph_executes_tool_and_returns_to_agent(self):
         llm = ToolCallingModel()
-        app = build_graph(llm, TOOLS)
+        app = build_graph(llm, TOOLS, checkpointer=InMemorySaver())
 
         result = app.invoke(
-            {"messages": [HumanMessage(content="计算 6 * 7")]}
+            {"messages": [HumanMessage(content="计算 6 * 7")]},
+            config={"configurable": {"thread_id": "user_001"}},
         )
 
         self.assertEqual(llm.invocation_count, 2)
@@ -82,6 +112,58 @@ class ReactGraphTests(unittest.TestCase):
             any(isinstance(message, ToolMessage) for message in result["messages"])
         )
         self.assertEqual(result["messages"][-1].content, "计算结果是 42")
+
+    def test_same_thread_restores_conversation_messages(self):
+        app = build_graph(
+            NameMemoryModel(),
+            TOOLS,
+            checkpointer=InMemorySaver(),
+        )
+        config = {"configurable": {"thread_id": "user_001"}}
+
+        app.invoke(
+            {"messages": [HumanMessage(content="我的名字是小明")]},
+            config=config,
+        )
+        result = app.invoke(
+            {"messages": [HumanMessage(content="我叫什么名字？")]},
+            config=config,
+        )
+
+        self.assertEqual(result["messages"][-1].content, "你的名字是小明。")
+        human_messages = [
+            message
+            for message in result["messages"]
+            if isinstance(message, HumanMessage)
+        ]
+        self.assertEqual(len(human_messages), 2)
+
+    def test_different_threads_are_isolated(self):
+        app = build_graph(
+            NameMemoryModel(),
+            TOOLS,
+            checkpointer=InMemorySaver(),
+        )
+        user_001 = {"configurable": {"thread_id": "user_001"}}
+        user_002 = {"configurable": {"thread_id": "user_002"}}
+
+        app.invoke(
+            {"messages": [HumanMessage(content="我的名字是小明")]},
+            config=user_001,
+        )
+        result = app.invoke(
+            {"messages": [HumanMessage(content="我叫什么名字？")]},
+            config=user_002,
+        )
+
+        self.assertEqual(result["messages"][-1].content, "我不知道你的名字。")
+        self.assertFalse(
+            any(
+                isinstance(message, HumanMessage)
+                and "我的名字是小明" in message.content
+                for message in result["messages"]
+            )
+        )
 
 
 if __name__ == "__main__":

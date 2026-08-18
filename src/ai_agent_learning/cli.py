@@ -1,6 +1,7 @@
 import logging
 
 from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from ai_agent_learning.agent import build_graph
@@ -11,14 +12,30 @@ from ai_agent_learning.tools import TOOLS
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_THREAD_ID = "default"
 
 
 def create_agent_app(settings: Settings):
     llm = create_llm(settings)
-    return build_graph(llm, TOOLS)
+    checkpointer = InMemorySaver()
+    return build_graph(llm, TOOLS, checkpointer=checkpointer)
 
 
-def run_cli(app) -> None:
+def prompt_thread_id() -> str | None:
+    try:
+        thread_id = input(
+            f"请输入会话 ID（直接回车使用 {DEFAULT_THREAD_ID}）:"
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+    return thread_id or DEFAULT_THREAD_ID
+
+
+def run_cli(app, thread_id: str) -> None:
+    config = {"configurable": {"thread_id": thread_id}}
+
     while True:
         try:
             user_input = input("请输入（输入 exit 退出）:").strip()
@@ -34,7 +51,8 @@ def run_cli(app) -> None:
 
         try:
             result = app.invoke(
-                {"messages": [HumanMessage(content=user_input)]}
+                {"messages": [HumanMessage(content=user_input)]},
+                config=config,
             )
         except Exception:
             logger.exception("Agent request failed")
@@ -60,6 +78,14 @@ def main() -> int:
         logger.exception("Agent startup failed")
         return 1
 
-    logger.info("AI Agent started with model %s", settings.deepseek_model)
-    run_cli(app)
+    thread_id = prompt_thread_id()
+    if thread_id is None:
+        return 0
+
+    logger.info(
+        "AI Agent started with model %s and thread %s",
+        settings.deepseek_model,
+        thread_id,
+    )
+    run_cli(app, thread_id)
     return 0

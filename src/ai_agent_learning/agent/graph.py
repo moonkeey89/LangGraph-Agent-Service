@@ -3,6 +3,7 @@ from collections.abc import Sequence
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
@@ -13,7 +14,11 @@ from ai_agent_learning.agent.state import AgentState
 logger = logging.getLogger(__name__)
 
 
-def build_graph(llm: BaseChatModel, tools: Sequence[BaseTool]):
+def build_graph(
+    llm: BaseChatModel,
+    tools: Sequence[BaseTool],
+    checkpointer: BaseCheckpointSaver | None = None,
+):
     agent = AgentNode(llm, tools)
     tool_node = ToolNode(tools)
     graph = StateGraph(AgentState)
@@ -25,4 +30,4 @@ def build_graph(llm: BaseChatModel, tools: Sequence[BaseTool]):
     graph.add_edge("tools", "agent")
 
     logger.info("Compiled LangGraph ReAct workflow")
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
