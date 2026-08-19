@@ -2,7 +2,6 @@ import unittest
 from unittest.mock import Mock, patch
 
 from langchain_core.messages import AIMessage
-from langgraph.checkpoint.memory import InMemorySaver
 
 from ai_agent_learning.cli import (
     DEFAULT_THREAD_ID,
@@ -15,21 +14,21 @@ from ai_agent_learning.cli import (
 class CliTests(unittest.TestCase):
     @patch("ai_agent_learning.cli.build_graph")
     @patch("ai_agent_learning.cli.create_llm")
-    def test_create_agent_app_injects_in_memory_checkpointer(
+    def test_create_agent_app_injects_provided_checkpointer(
         self,
         create_llm,
         build_graph,
     ):
         settings = Mock()
         llm = create_llm.return_value
+        checkpointer = Mock()
 
-        create_agent_app(settings)
+        create_agent_app(settings, checkpointer)
 
         create_llm.assert_called_once_with(settings)
         self.assertIs(build_graph.call_args.args[0], llm)
-        self.assertIsInstance(
-            build_graph.call_args.kwargs["checkpointer"],
-            InMemorySaver,
+        self.assertIs(
+            build_graph.call_args.kwargs["checkpointer"], checkpointer
         )
 
     @patch("builtins.print")

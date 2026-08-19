@@ -596,7 +596,7 @@ START → AgentNode → tools_condition            │
 | `ResponseGenerator` | 工具执行后再次调用 AgentNode | 同一个 LLM 节点生成最终回答 |
 | 自研 `AgentState` | TypedDict State + reducer | 当前只保留 messages |
 | 自研 `AgentGraph` | LangGraph `StateGraph` | 节点、边、条件分支和循环 |
-| `Memory` | `InMemorySaver`（仅短期部分） | 当前只实现按 thread_id 保存图状态；长期 Memory 仍未接入 |
+| `Memory` | `SqliteSaver`（仅短期部分） | 当前按 thread_id 持久化图状态；长期 Memory 仍未接入 |
 
 需要特别注意：
 
@@ -614,7 +614,7 @@ main.py
 ai_agent_learning.cli
    ↓
 Settings → LLM Factory ───────────────┐
-InMemorySaver ────────────────────────┤
+SqliteSaver ──────────────────────────┤
                                      ↓
                          build_graph → compile(checkpointer)
                                      ↓
@@ -783,7 +783,7 @@ AgentNode 和 ToolNode 使用同一份 Tool 集合
 
 ### 15.3 已完成：基于 Checkpointer 的多轮短期会话
 
-当前 CLI 在启动时确定一个稳定的 `thread_id`，在创建应用时使用 `InMemorySaver`，并把它传给 `graph.compile(checkpointer=...)`。循环中的每次 `graph.invoke()` 都携带同一份 `thread_id` 配置，因此 LangGraph 可以在新一轮执行前恢复该线程的历史 State。
+当前 CLI 在启动时确定一个稳定的 `thread_id`，打开 `data/checkpoints.sqlite` 中的 `SqliteSaver`，并把它传给 `graph.compile(checkpointer=...)`。循环中的每次 `graph.invoke()` 都携带同一份 `thread_id` 配置，因此 LangGraph 可以在新一轮执行前恢复该线程的历史 State。
 
 需要区分：
 
@@ -792,13 +792,13 @@ State
     当前一次图执行中的共享状态
 
 Short-term Memory
-    同一个对话线程中的历史，由当前 InMemorySaver 在进程内保存
+    同一个对话线程中的历史，由当前 SqliteSaver 持久化保存
 
 Long-term Memory
     跨线程、跨进程保存的用户偏好或事实，需要 Store 或数据库
 ```
 
-这里的边界很重要：当前 Checkpointer 让同一进程内的连续对话具有上下文，但程序重启后数据会消失，也不会把一个线程中的信息自动共享给另一个线程。
+这里的边界很重要：当前 Checkpointer 允许程序重启后继续恢复同一个线程，但不会把一个线程中的信息自动共享给另一个线程；跨线程用户偏好仍属于长期 Memory 的范围。
 
 ### 15.4 第四优先级：可靠性和循环控制
 
@@ -943,9 +943,15 @@ thread_id=user_002
 
 ```text
 cli.py
-    创建 InMemorySaver
+    在 SQLite 连接有效期内编译 Graph 并运行 CLI
     在程序启动时确定 thread_id
     每轮通过 config 把同一个 thread_id 传给 graph.invoke()
+
+checkpoint.py
+    创建 data 目录但不删除已有数据库
+    打开 data/checkpoints.sqlite
+    创建 SqliteSaver 并初始化表
+    在上下文退出时关闭 SQLite 连接
 
 agent/graph.py
     接收 Checkpointer
@@ -962,8 +968,8 @@ AgentNode
 ToolNode
     按原有方式执行工具并生成 ToolMessage
 
-InMemorySaver
-    按 thread_id 隔离、保存和恢复图状态
+SqliteSaver
+    按 thread_id 隔离、持久化和恢复图状态
 ```
 
 AgentNode 和 ToolNode 不需要自己读写 Checkpoint。状态恢复和保存发生在编译后的 LangGraph 运行时边界，这正是 Checkpointer 属于“编排基础设施”而不是业务逻辑的原因。
@@ -972,9 +978,10 @@ AgentNode 和 ToolNode 不需要自己读写 Checkpoint。状态恢复和保存�
 
 ```text
 程序启动
-  → create_agent_app()
+  → open_sqlite_checkpointer()
+  → 打开 data/checkpoints.sqlite
+  → create_agent_app(settings, checkpointer)
   → 创建 LLM
-  → 创建 InMemorySaver
   → build_graph(..., checkpointer)
   → graph.compile(checkpointer=checkpointer)
 
@@ -993,6 +1000,7 @@ AgentNode 和 ToolNode 不需要自己读写 Checkpoint。状态恢复和保存�
   → 输出最终 AIMessage
   → Checkpointer 保存该 thread_id 的最新 State
   → CLI 打印回答并等待下一轮
+  → CLI 退出后关闭 SQLite 连接
 ```
 
 ### 17.4 学习时应能回答的判断题
@@ -1001,7 +1009,7 @@ AgentNode 和 ToolNode 不需要自己读写 Checkpoint。状态恢复和保存�
 - 每轮生成新的 `thread_id`，相当于每轮开启新会话，无法恢复上一轮状态。
 - 两个用户误用同一个 `thread_id`，会共享同一份会话状态，因此生产系统必须正确生成和鉴权会话 ID。
 - `add_messages` 决定新旧消息怎样合并；没有正确 reducer 时，新输入可能覆盖历史列表。
-- `InMemorySaver` 只适合当前教学阶段和单进程测试；进程退出后不会保留数据。
+- `SqliteSaver` 适合本地开发和轻量教学项目；同一数据库文件可以跨进程恢复状态。
 - Checkpoint 保存图状态，长期 Memory 则解决跨会话的事实、偏好与知识沉淀，两者不能混为一谈。
 
 ### 17.5 查看当前 StateSnapshot
@@ -1071,3 +1079,67 @@ AIMessage("计算结果是 42")
 ```
 
 这里的 `next` 特别适合学习图的控制流：消息说明“状态里已经有什么”，`next` 说明“接下来准备执行谁”。因此历史快照不仅是聊天记录，也是一条可用于调试的 Graph 执行轨迹。
+
+---
+
+## 18. SQLite Checkpoint 持久化
+
+### 18.1 为什么选择同步 SqliteSaver
+
+当前项目调用的是同步 API：
+
+```text
+graph.invoke()
+graph.get_state()
+graph.get_state_history()
+```
+
+因此使用同步的 `langgraph.checkpoint.sqlite.SqliteSaver`。`AsyncSqliteSaver` 对应的是 `ainvoke()`、`aget_state()` 等异步调用；为了更换存储而改变整个调用模型没有必要。
+
+### 18.2 数据库与连接生命周期
+
+```text
+main()
+  → open_sqlite_checkpointer()
+      → 创建 data/（如果不存在）
+      → 打开 data/checkpoints.sqlite（不删除、不覆盖）
+      → SqliteSaver.setup() 创建或迁移所需表
+  → create_agent_app(settings, checkpointer)
+  → build_graph(...)
+  → graph.compile(checkpointer=checkpointer)
+  → prompt_thread_id()
+  → run_cli()
+      → invoke / get_state / get_state_history
+  → 退出 with 作用域
+  → 关闭 SQLite 连接
+```
+
+Graph 持有 Checkpointer，所以 Graph 的编译、执行和状态查看都必须发生在 SQLite 连接仍然有效的 `with` 作用域内。不能在 `with` 内创建 Graph 后，把它返回到作用域外继续使用。
+
+### 18.3 保存与恢复不需要业务 SQL
+
+每次执行仍然只传：
+
+```python
+config = {"configurable": {"thread_id": thread_id}}
+graph.invoke({"messages": [new_message]}, config=config)
+```
+
+LangGraph 运行时会调用 `SqliteSaver` 的 Checkpointer 接口保存每一步 State；下一次启动时，它用相同 `thread_id` 从同一个 SQLite 文件恢复最新 Checkpoint。项目代码不需要为 `messages` 编写 `INSERT` 或 `SELECT`，否则会重复实现框架已经负责的序列化、版本和父子快照管理。
+
+### 18.4 它仍然是短期会话记忆
+
+SQLite 让短期记忆具有了持久性，但没有改变它的作用域：
+
+```text
+相同 thread_id
+    → 恢复同一段会话
+
+不同 thread_id
+    → 状态隔离
+
+长期用户偏好
+    → 当前阶段未实现
+```
+
+数据库文件包含用户对话，应当视为本地敏感数据。项目通过 `.gitignore` 忽略 `data/*.sqlite` 及其辅助文件，只提交 `data/.gitkeep`，不把真实会话状态推送到 Git。

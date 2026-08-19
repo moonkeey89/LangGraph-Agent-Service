@@ -1,9 +1,11 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.memory import InMemorySaver
 
 from ai_agent_learning.agent import build_graph
+from ai_agent_learning.checkpoint import open_sqlite_checkpointer
 from ai_agent_learning.tools import TOOLS
 
 
@@ -73,6 +75,15 @@ class NameMemoryModel:
 
 
 class ReactGraphTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = TemporaryDirectory()
+        self.database_path = (
+            Path(self.temporary_directory.name) / "checkpoints.sqlite"
+        )
+
+    def tearDown(self):
+        self.temporary_directory.cleanup()
+
     def test_graph_structure_is_unchanged(self):
         app = build_graph(DirectAnswerModel(), TOOLS)
         graph = app.get_graph()
@@ -100,99 +111,124 @@ class ReactGraphTests(unittest.TestCase):
 
     def test_graph_executes_tool_and_returns_to_agent(self):
         llm = ToolCallingModel()
-        app = build_graph(llm, TOOLS, checkpointer=InMemorySaver())
+        with open_sqlite_checkpointer(self.database_path) as checkpointer:
+            app = build_graph(llm, TOOLS, checkpointer=checkpointer)
 
-        result = app.invoke(
-            {"messages": [HumanMessage(content="计算 6 * 7")]},
-            config={"configurable": {"thread_id": "user_001"}},
-        )
+            result = app.invoke(
+                {"messages": [HumanMessage(content="计算 6 * 7")]},
+                config={"configurable": {"thread_id": "user_001"}},
+            )
 
-        self.assertEqual(llm.invocation_count, 2)
-        self.assertTrue(
-            any(isinstance(message, ToolMessage) for message in result["messages"])
-        )
-        self.assertEqual(result["messages"][-1].content, "计算结果是 42")
+            self.assertEqual(llm.invocation_count, 2)
+            self.assertTrue(
+                any(
+                    isinstance(message, ToolMessage)
+                    for message in result["messages"]
+                )
+            )
+            self.assertEqual(result["messages"][-1].content, "计算结果是 42")
 
-        history = list(
-            app.get_state_history(
-                {"configurable": {"thread_id": "user_001"}}
+            history = list(
+                app.get_state_history(
+                    {"configurable": {"thread_id": "user_001"}}
+                )
             )
-        )
-        self.assertTrue(
-            any(
-                snapshot.next == ("tools",)
-                and isinstance(snapshot.values["messages"][-1], AIMessage)
-                and snapshot.values["messages"][-1].tool_calls
-                for snapshot in history
+            self.assertTrue(
+                any(
+                    snapshot.next == ("tools",)
+                    and isinstance(snapshot.values["messages"][-1], AIMessage)
+                    and snapshot.values["messages"][-1].tool_calls
+                    for snapshot in history
+                )
             )
-        )
-        self.assertTrue(
-            any(
-                snapshot.next == ("agent",)
-                and isinstance(snapshot.values["messages"][-1], ToolMessage)
-                for snapshot in history
+            self.assertTrue(
+                any(
+                    snapshot.next == ("agent",)
+                    and isinstance(snapshot.values["messages"][-1], ToolMessage)
+                    for snapshot in history
+                )
             )
-        )
-        self.assertTrue(
-            any(
-                snapshot.next == ()
-                and snapshot.values.get("messages")
-                and snapshot.values["messages"][-1].content == "计算结果是 42"
-                for snapshot in history
+            self.assertTrue(
+                any(
+                    snapshot.next == ()
+                    and snapshot.values.get("messages")
+                    and snapshot.values["messages"][-1].content
+                    == "计算结果是 42"
+                    for snapshot in history
+                )
             )
-        )
 
-    def test_same_thread_restores_conversation_messages(self):
-        app = build_graph(
-            NameMemoryModel(),
-            TOOLS,
-            checkpointer=InMemorySaver(),
-        )
+    def test_same_thread_restores_messages_and_history_after_new_connection(self):
         config = {"configurable": {"thread_id": "user_001"}}
 
-        app.invoke(
-            {"messages": [HumanMessage(content="我的名字是小明")]},
-            config=config,
-        )
-        result = app.invoke(
-            {"messages": [HumanMessage(content="我叫什么名字？")]},
-            config=config,
-        )
+        with open_sqlite_checkpointer(self.database_path) as first_checkpointer:
+            first_app = build_graph(
+                NameMemoryModel(), TOOLS, checkpointer=first_checkpointer
+            )
+            first_app.invoke(
+                {"messages": [HumanMessage(content="我的名字是小明")]},
+                config=config,
+            )
+            history_before_restart = list(first_app.get_state_history(config))
 
-        self.assertEqual(result["messages"][-1].content, "你的名字是小明。")
-        human_messages = [
-            message
-            for message in result["messages"]
-            if isinstance(message, HumanMessage)
-        ]
-        self.assertEqual(len(human_messages), 2)
+        with open_sqlite_checkpointer(self.database_path) as second_checkpointer:
+            second_app = build_graph(
+                NameMemoryModel(), TOOLS, checkpointer=second_checkpointer
+            )
+            state_after_restart = second_app.get_state(config)
+            history_after_restart = list(second_app.get_state_history(config))
+            result = second_app.invoke(
+                {"messages": [HumanMessage(content="我叫什么名字？")]},
+                config=config,
+            )
+
+            self.assertTrue(
+                any(
+                    isinstance(message, HumanMessage)
+                    and message.content == "我的名字是小明"
+                    for message in state_after_restart.values["messages"]
+                )
+            )
+            self.assertEqual(
+                len(history_after_restart), len(history_before_restart)
+            )
+            self.assertEqual(
+                result["messages"][-1].content, "你的名字是小明。"
+            )
+            human_messages = [
+                message
+                for message in result["messages"]
+                if isinstance(message, HumanMessage)
+            ]
+            self.assertEqual(len(human_messages), 2)
 
     def test_different_threads_are_isolated(self):
-        app = build_graph(
-            NameMemoryModel(),
-            TOOLS,
-            checkpointer=InMemorySaver(),
-        )
         user_001 = {"configurable": {"thread_id": "user_001"}}
         user_002 = {"configurable": {"thread_id": "user_002"}}
 
-        app.invoke(
-            {"messages": [HumanMessage(content="我的名字是小明")]},
-            config=user_001,
-        )
-        result = app.invoke(
-            {"messages": [HumanMessage(content="我叫什么名字？")]},
-            config=user_002,
-        )
-
-        self.assertEqual(result["messages"][-1].content, "我不知道你的名字。")
-        self.assertFalse(
-            any(
-                isinstance(message, HumanMessage)
-                and "我的名字是小明" in message.content
-                for message in result["messages"]
+        with open_sqlite_checkpointer(self.database_path) as checkpointer:
+            app = build_graph(
+                NameMemoryModel(), TOOLS, checkpointer=checkpointer
             )
-        )
+            app.invoke(
+                {"messages": [HumanMessage(content="我的名字是小明")]},
+                config=user_001,
+            )
+            result = app.invoke(
+                {"messages": [HumanMessage(content="我叫什么名字？")]},
+                config=user_002,
+            )
+
+            self.assertEqual(
+                result["messages"][-1].content, "我不知道你的名字。"
+            )
+            self.assertFalse(
+                any(
+                    isinstance(message, HumanMessage)
+                    and "我的名字是小明" in message.content
+                    for message in result["messages"]
+                )
+            )
 
 
 if __name__ == "__main__":

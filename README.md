@@ -10,7 +10,7 @@
 用户 + thread_id → LangGraph → AgentNode → ToolNode → LangChain Tool → Skill
                          ↑      ↑            │
                          │      └─ ToolMessage┘
-                         └─ InMemorySaver（按 thread_id 恢复/保存 State）
+                         └─ SqliteSaver（按 thread_id 持久化 State）
 ```
 
 - `skills`：真正的业务能力，不依赖 LangChain 或 LangGraph。
@@ -18,7 +18,7 @@
 - `AgentNode`：调用绑定 Tools 的 LLM，负责决策。
 - `ToolNode`：执行 LLM 生成的 Tool Calls。
 - `StateGraph`：编排 AgentNode、ToolNode、条件路由和 ReAct 循环。
-- `InMemorySaver`：按 `thread_id` 保存进程内 Checkpoint，为连续会话恢复短期状态。
+- `SqliteSaver`：按 `thread_id` 将 Checkpoint 保存到本地 SQLite 文件，支持程序重启后恢复会话。
 - `legacy`：早期手写 Agent 代码，不进入当前运行链。
 
 ## 环境要求
@@ -65,7 +65,7 @@ DEEPSEEK_API_KEY=your-real-key
 /history    从新到旧查看当前会话的 Checkpoint 历史
 ```
 
-当前使用进程内 Checkpointer，程序退出后状态会丢失；它不是数据库或长期记忆。
+当前 Checkpoint 数据保存在 `data/checkpoints.sqlite`。程序重启后输入相同会话 ID 会恢复原会话；输入新的会话 ID 会创建隔离状态。SQLite Checkpoint 是持久化的会话状态，但仍不等于跨会话的长期 Memory。
 
 ## 测试
 
@@ -80,6 +80,7 @@ DEEPSEEK_API_KEY=your-real-key
 ```text
 src/ai_agent_learning/
 ├── cli.py              # CLI 入口与最外层错误边界
+├── checkpoint.py       # SQLite Checkpointer 路径和连接生命周期
 ├── config.py           # 配置加载和校验
 ├── llm.py              # DeepSeek LLM 创建
 ├── logging_config.py   # 标准日志初始化
@@ -93,15 +94,16 @@ tests/
 
 legacy/                 # 旧手写 Agent 学习代码
 docs/                   # 学习文档
+data/                   # 本地 Checkpoint 目录（数据库文件不提交 Git）
 ```
 
 更完整的原理和学习路径参见 [docs/comprehension.md](docs/comprehension.md)。
 
 ## 当前范围
 
-当前项目覆盖基础 LangGraph ReAct Agent 工程结构和进程内短期会话记忆，暂未实现：
+当前项目覆盖基础 LangGraph ReAct Agent 工程结构和 SQLite 持久化短期会话记忆，暂未实现：
 
-- 持久化 Checkpointer 与长期 Memory
+- 跨会话长期 Memory
 - RAG
 - FastAPI
 - Multi-Agent

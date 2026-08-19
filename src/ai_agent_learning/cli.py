@@ -1,7 +1,7 @@
 import logging
 
 from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from pydantic import ValidationError
 
 from ai_agent_learning.agent import (
@@ -9,6 +9,7 @@ from ai_agent_learning.agent import (
     show_current_state,
     show_state_history,
 )
+from ai_agent_learning.checkpoint import CHECKPOINT_DB_PATH, open_sqlite_checkpointer
 from ai_agent_learning.config import Settings
 from ai_agent_learning.llm import create_llm
 from ai_agent_learning.logging_config import configure_logging
@@ -19,9 +20,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_THREAD_ID = "default"
 
 
-def create_agent_app(settings: Settings):
+def create_agent_app(
+    settings: Settings,
+    checkpointer: BaseCheckpointSaver,
+):
     llm = create_llm(settings)
-    checkpointer = InMemorySaver()
     return build_graph(llm, TOOLS, checkpointer=checkpointer)
 
 
@@ -88,19 +91,22 @@ def main() -> int:
     configure_logging(settings.log_level)
 
     try:
-        app = create_agent_app(settings)
+        with open_sqlite_checkpointer() as checkpointer:
+            app = create_agent_app(settings, checkpointer)
+
+            thread_id = prompt_thread_id()
+            if thread_id is None:
+                return 0
+
+            logger.info(
+                "AI Agent started with model %s, thread %s, checkpoint database %s",
+                settings.deepseek_model,
+                thread_id,
+                CHECKPOINT_DB_PATH,
+            )
+            run_cli(app, thread_id)
     except Exception:
         logger.exception("Agent startup failed")
         return 1
 
-    thread_id = prompt_thread_id()
-    if thread_id is None:
-        return 0
-
-    logger.info(
-        "AI Agent started with model %s and thread %s",
-        settings.deepseek_model,
-        thread_id,
-    )
-    run_cli(app, thread_id)
     return 0
