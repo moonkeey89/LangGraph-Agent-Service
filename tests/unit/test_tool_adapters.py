@@ -1,7 +1,13 @@
 import unittest
 from unittest.mock import patch
 
-from ai_agent_learning.tools import TOOLS, calculate, get_weather, search_attraction
+from ai_agent_learning.tools import (
+    TOOLS,
+    calculate,
+    get_weather,
+    save_memory,
+    search_attraction,
+)
 
 
 class ToolAdapterTests(unittest.TestCase):
@@ -37,12 +43,44 @@ class ToolAdapterTests(unittest.TestCase):
         skill.assert_called_once_with("北京")
         self.assertEqual(result, attractions)
 
+    def test_save_memory_executes_skill_only_after_approval(self):
+        with (
+            patch(
+                "ai_agent_learning.tools.adapters.interrupt",
+                return_value={"approved": True},
+            ) as approval,
+            patch(
+                "ai_agent_learning.tools.adapters.save_memory_skill",
+                return_value="保存成功",
+            ) as skill,
+        ):
+            result = save_memory.invoke({"content": "我喜欢Python"})
+
+        approval.assert_called_once()
+        skill.assert_called_once_with("我喜欢Python")
+        self.assertEqual(result, "保存成功")
+
+    def test_save_memory_does_not_execute_skill_after_rejection(self):
+        with (
+            patch(
+                "ai_agent_learning.tools.adapters.interrupt",
+                return_value={"approved": False, "reason": "用户拒绝"},
+            ),
+            patch(
+                "ai_agent_learning.tools.adapters.save_memory_skill"
+            ) as skill,
+        ):
+            result = save_memory.invoke({"content": "我喜欢Python"})
+
+        skill.assert_not_called()
+        self.assertIn("用户拒绝", result)
+
     def test_tool_catalog_has_expected_unique_names(self):
         tool_names = [tool.name for tool in TOOLS]
 
         self.assertEqual(
             tool_names,
-            ["get_weather", "calculate", "search_attraction"],
+            ["get_weather", "calculate", "search_attraction", "save_memory"],
         )
         self.assertEqual(len(tool_names), len(set(tool_names)))
 

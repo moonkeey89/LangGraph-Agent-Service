@@ -2,6 +2,7 @@ from ai_agent_learning.tools.adapters import (
     TOOLS,
     calculate,
     get_weather,
+    save_memory,
     search_attraction,
 )
 
@@ -10,5 +11,6 @@ __all__ = [
     "TOOLS",
     "get_weather",
     "calculate",
+    "save_memory",
     "search_attraction",
 ]

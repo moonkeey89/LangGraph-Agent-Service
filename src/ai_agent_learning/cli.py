@@ -1,7 +1,9 @@
+import json
 import logging
 
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.types import Command, Interrupt
 from pydantic import ValidationError
 
 from ai_agent_learning.agent import (
@@ -40,8 +42,79 @@ def prompt_thread_id() -> str | None:
     return thread_id or DEFAULT_THREAD_ID
 
 
+def _extract_interrupts(result) -> tuple[Interrupt, ...]:
+    if isinstance(result, dict):
+        interrupts = result.get("__interrupt__", ())
+    else:
+        interrupts = getattr(result, "interrupts", ())
+
+    return tuple(interrupts or ())
+
+
+def _pending_interrupts(app, config: dict) -> tuple[Interrupt, ...]:
+    interrupts = getattr(app.get_state(config), "interrupts", ())
+    if not isinstance(interrupts, (list, tuple)):
+        return ()
+    return tuple(interrupts)
+
+
+def prompt_approval(interrupt_info: Interrupt) -> dict[str, object] | None:
+    print("\n检测到需要人工审批的敏感操作：")
+    print(json.dumps(interrupt_info.value, ensure_ascii=False, indent=2))
+
+    while True:
+        try:
+            decision = input(
+                "请输入 approve 批准、reject 拒绝，或 exit 保持暂停并退出："
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
+        if decision == "approve":
+            return {"approved": True}
+        if decision == "reject":
+            return {"approved": False, "reason": "用户拒绝"}
+        if decision in {"exit", "quit"}:
+            return None
+
+        print("无法识别，请输入 approve、reject 或 exit。")
+
+
+def resume_interrupted_graph(
+    app,
+    config: dict,
+    interrupts: tuple[Interrupt, ...],
+):
+    current_interrupts = interrupts
+
+    while current_interrupts:
+        resume_value = prompt_approval(current_interrupts[0])
+        if resume_value is None:
+            print("审批状态已保留，可使用相同 thread_id 重新启动后继续。")
+            return None
+
+        result = app.invoke(Command(resume=resume_value), config=config)
+        current_interrupts = _extract_interrupts(result)
+
+    return result
+
+
 def run_cli(app, thread_id: str) -> None:
     config = {"configurable": {"thread_id": thread_id}}
+
+    try:
+        pending = _pending_interrupts(app, config)
+        if pending:
+            print("检测到该会话存在尚未处理的审批请求。")
+            resumed_result = resume_interrupted_graph(app, config, pending)
+            if resumed_result is None:
+                return
+            print(resumed_result["messages"][-1].content)
+    except Exception:
+        logger.exception("Failed to resume pending approval")
+        print("恢复待审批操作失败，请检查 Checkpoint 状态。")
+        return
 
     while True:
         try:
@@ -72,6 +145,11 @@ def run_cli(app, thread_id: str) -> None:
                 {"messages": [HumanMessage(content=user_input)]},
                 config=config,
             )
+            interrupts = _extract_interrupts(result)
+            if interrupts:
+                result = resume_interrupted_graph(app, config, interrupts)
+                if result is None:
+                    return
         except Exception:
             logger.exception("Agent request failed")
             print("抱歉，本次请求执行失败，请稍后重试。")

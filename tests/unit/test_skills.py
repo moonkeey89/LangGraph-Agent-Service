@@ -1,9 +1,21 @@
 import unittest
 
-from ai_agent_learning.skills import calculate, get_weather, search_attraction
+from ai_agent_learning.skills import (
+    calculate,
+    get_weather,
+    save_memory,
+    search_attraction,
+)
+from ai_agent_learning.skills.memory import (
+    clear_saved_memories,
+    get_saved_memories,
+)
 
 
 class SkillTests(unittest.TestCase):
+    def tearDown(self):
+        clear_saved_memories()
+
     def test_weather_uses_business_data(self):
         self.assertEqual(get_weather("上海"), "小雨，22℃")
 
@@ -40,6 +52,12 @@ class SkillTests(unittest.TestCase):
     def test_calculator_handles_invalid_math(self):
         self.assertEqual(calculate("1 / 0"), "无法计算")
         self.assertEqual(calculate("not math"), "无法计算")
+
+    def test_simulated_memory_skill_has_a_real_in_process_side_effect(self):
+        result = save_memory("我喜欢Python")
+
+        self.assertEqual(get_saved_memories(), ("我喜欢Python",))
+        self.assertIn("已保存", result)
 
 
 if __name__ == "__main__":

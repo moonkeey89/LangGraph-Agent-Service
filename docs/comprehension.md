@@ -1143,3 +1143,129 @@ SQLite 让短期记忆具有了持久性，但没有改变它的作用域：
 ```
 
 数据库文件包含用户对话，应当视为本地敏感数据。项目通过 `.gitignore` 忽略 `data/*.sqlite` 及其辅助文件，只提交 `data/.gitkeep`，不把真实会话状态推送到 Git。
+
+---
+
+## 19. interrupt 与人工审批
+
+### 19.1 为什么新增模拟 save_memory
+
+改造前的 Tool 清单只有：
+
+```text
+get_weather
+calculate
+search_attraction
+```
+
+它们都是查询或计算能力，不适合演示“批准之后才发生写入”。项目虽然有 `get_current_time` Skill，但它没有注册为 Tool，也不是敏感操作。因此新增教学用 `save_memory`：Skill 把内容追加到进程内列表，用来产生可验证的真实副作用，但不实现跨进程长期记忆。
+
+### 19.2 interrupt 在哪里
+
+审批发生在 `tools/adapters.py` 的 `save_memory` LangChain Tool 中：
+
+```python
+decision = interrupt(
+    {
+        "action": "save_user_memory",
+        "tool_name": "save_memory",
+        "arguments": {"content": content},
+        "message": "该操作将写入一条模拟记忆，是否批准？",
+    }
+)
+
+if decision.get("approved") is not True:
+    return "保存操作已取消"
+
+return save_memory_skill(content)
+```
+
+`interrupt()` 的 payload 只包含字符串、布尔值和字典，因此可以被 JSON 序列化。真正产生副作用的 `save_memory_skill()` 位于 interrupt 之后。
+
+### 19.3 暂停时发生了什么
+
+```text
+HumanMessage("请记住，我喜欢Python")
+  → AgentNode 生成 save_memory tool_call
+  → tools_condition 路由到 ToolNode
+  → ToolNode 调用 save_memory Tool
+  → interrupt(JSON payload)
+  → Graph 暂停
+  → SqliteSaver 保存：
+      当前 messages
+      待执行节点 tools
+      ToolNode 任务
+      Interrupt payload 和 interrupt id
+      Checkpoint 父子关系
+```
+
+此时没有调用 Skill，所以模拟记忆列表仍然为空。`graph.get_state(config)` 的 `snapshot.next` 是 `("tools",)`，`snapshot.interrupts` 中包含待审批信息。
+
+### 19.4 CLI 如何恢复
+
+当前项目保持同步 `invoke()`：
+
+```text
+首次执行：
+graph.invoke({messages: [HumanMessage]}, config)
+    → 返回 __interrupt__
+
+批准：
+graph.invoke(Command(resume={"approved": True}), config)
+
+拒绝：
+graph.invoke(
+    Command(resume={"approved": False, "reason": "用户拒绝"}),
+    config,
+)
+```
+
+CLI 会循环处理 interrupt，直到 Graph 完成或用户输入 `exit`。如果用户在审批时退出，下一次使用相同 thread_id 启动时，CLI 通过 `graph.get_state(config).interrupts` 找到 SQLite 中的待审批任务，再发送 Command 恢复。
+
+批准或拒绝都不是一条新的对话内容，所以不能包装为 HumanMessage。HumanMessage 会让 Graph 从输入边界开始一次新运行，LLM 可能重新规划工具；`Command(resume=...)` 则把数据交还给原来那个 interrupt 调用点。
+
+### 19.5 为什么必须使用相同 thread_id
+
+```text
+data/checkpoints.sqlite
+├── thread_hitl_003 → tools 节点中待恢复的 interrupt
+└── thread_hitl_004 → 独立状态
+```
+
+Command 本身不携带“恢复哪个任务”的完整位置。LangGraph 使用调用 config 中的 thread_id 定位 SQLite Checkpoint，再根据其中保存的任务和 interrupt id，把 resume 数据交给正确的 interrupt。换一个 thread_id 就找不到原暂停点。
+
+### 19.6 节点为什么会从开头重新执行
+
+恢复 interrupt 时，LangGraph 会重新执行包含 interrupt 的节点。当前 interrupt 位于 ToolNode 调用的 `save_memory` Tool 中，因此 Tool 调用入口和 interrupt 之前的纯计算会再次运行：
+
+```text
+重新进入 ToolNode
+  → 再次解析同一个 tool_call
+  → 再次构造审批 payload
+  → 再次调用 interrupt(payload)
+  → interrupt 返回已保存的 resume 数据
+  → 根据 approved 决定是否调用 Skill
+```
+
+当前 interrupt 之前只有字典构造等无副作用操作。真正的列表写入在 interrupt 之后，所以普通的暂停和恢复不会重复写入。
+
+但需要理解更严格的工程边界：如果进程恰好在“外部写入已经成功、LangGraph 尚未保存写入后的 Checkpoint”之间崩溃，恢复仍可能再次执行写入。真实支付、发邮件或数据库更新还需要幂等键、唯一约束或业务事务；interrupt 本身不提供分布式 exactly-once 保证。
+
+### 19.7 批准、拒绝和普通工具的路径
+
+```text
+普通工具：
+AgentNode → ToolNode → calculate/get_weather/... → AgentNode → END
+
+敏感工具批准：
+AgentNode → ToolNode → interrupt
+                         ↓ Command(approved=True)
+                       save_memory Skill → ToolMessage → AgentNode → END
+
+敏感工具拒绝：
+AgentNode → ToolNode → interrupt
+                         ↓ Command(approved=False)
+                       取消 ToolMessage → AgentNode → END
+```
+
+Graph 节点和边没有改变。HITL 能力来自敏感 Tool 内的动态 interrupt、SQLite Checkpoint 和 CLI 的 Command 恢复协议。

@@ -3,9 +3,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.types import Command
 
 from ai_agent_learning.agent import build_graph
 from ai_agent_learning.checkpoint import open_sqlite_checkpointer
+from ai_agent_learning.skills.memory import (
+    clear_saved_memories,
+    get_saved_memories,
+)
 from ai_agent_learning.tools import TOOLS
 
 
@@ -74,14 +79,48 @@ class NameMemoryModel:
         return AIMessage(content="好的。")
 
 
+class SaveMemoryToolCallingModel:
+    def bind_tools(self, _tools):
+        return self
+
+    def invoke(self, messages):
+        last_tool_message = next(
+            (
+                message
+                for message in reversed(messages)
+                if isinstance(message, ToolMessage)
+                and message.name == "save_memory"
+            ),
+            None,
+        )
+        if last_tool_message is not None:
+            if "取消" in last_tool_message.content:
+                return AIMessage(content="记忆保存操作已取消。")
+            return AIMessage(content="记忆保存成功。")
+
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "save_memory",
+                    "args": {"content": "我喜欢Python"},
+                    "id": "save-call-1",
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+
 class ReactGraphTests(unittest.TestCase):
     def setUp(self):
+        clear_saved_memories()
         self.temporary_directory = TemporaryDirectory()
         self.database_path = (
             Path(self.temporary_directory.name) / "checkpoints.sqlite"
         )
 
     def tearDown(self):
+        clear_saved_memories()
         self.temporary_directory.cleanup()
 
     def test_graph_structure_is_unchanged(self):
@@ -229,6 +268,101 @@ class ReactGraphTests(unittest.TestCase):
                     for message in result["messages"]
                 )
             )
+
+    def test_sensitive_tool_pauses_and_executes_once_after_approval(self):
+        config = {"configurable": {"thread_id": "thread_hitl_001"}}
+
+        with open_sqlite_checkpointer(self.database_path) as checkpointer:
+            app = build_graph(
+                SaveMemoryToolCallingModel(), TOOLS, checkpointer=checkpointer
+            )
+            interrupted = app.invoke(
+                {"messages": [HumanMessage(content="请记住，我喜欢Python")]},
+                config=config,
+            )
+
+            self.assertEqual(get_saved_memories(), ())
+            interrupt_info = interrupted["__interrupt__"][0]
+            self.assertEqual(interrupt_info.value["action"], "save_user_memory")
+            self.assertEqual(interrupt_info.value["tool_name"], "save_memory")
+            self.assertEqual(
+                interrupt_info.value["arguments"], {"content": "我喜欢Python"}
+            )
+
+            result = app.invoke(
+                Command(resume={"approved": True}),
+                config=config,
+            )
+
+            self.assertEqual(get_saved_memories(), ("我喜欢Python",))
+            self.assertEqual(result["messages"][-1].content, "记忆保存成功。")
+
+    def test_sensitive_tool_rejection_has_no_side_effect(self):
+        config = {"configurable": {"thread_id": "thread_hitl_002"}}
+
+        with open_sqlite_checkpointer(self.database_path) as checkpointer:
+            app = build_graph(
+                SaveMemoryToolCallingModel(), TOOLS, checkpointer=checkpointer
+            )
+            interrupted = app.invoke(
+                {"messages": [HumanMessage(content="请记住，我喜欢Python")]},
+                config=config,
+            )
+            self.assertTrue(interrupted["__interrupt__"])
+
+            result = app.invoke(
+                Command(
+                    resume={"approved": False, "reason": "用户拒绝"}
+                ),
+                config=config,
+            )
+
+            self.assertEqual(get_saved_memories(), ())
+            self.assertEqual(
+                result["messages"][-1].content, "记忆保存操作已取消。"
+            )
+
+    def test_pending_interrupt_survives_connection_restart_and_is_isolated(self):
+        interrupted_config = {
+            "configurable": {"thread_id": "thread_hitl_003"}
+        }
+        isolated_config = {
+            "configurable": {"thread_id": "thread_hitl_004"}
+        }
+
+        with open_sqlite_checkpointer(self.database_path) as first_checkpointer:
+            first_app = build_graph(
+                SaveMemoryToolCallingModel(),
+                TOOLS,
+                checkpointer=first_checkpointer,
+            )
+            first_app.invoke(
+                {"messages": [HumanMessage(content="请记住，我喜欢Python")]},
+                config=interrupted_config,
+            )
+            self.assertEqual(get_saved_memories(), ())
+
+        with open_sqlite_checkpointer(self.database_path) as second_checkpointer:
+            second_app = build_graph(
+                SaveMemoryToolCallingModel(),
+                TOOLS,
+                checkpointer=second_checkpointer,
+            )
+            pending_state = second_app.get_state(interrupted_config)
+            isolated_state = second_app.get_state(isolated_config)
+
+            self.assertTrue(pending_state.interrupts)
+            self.assertEqual(pending_state.next, ("tools",))
+            self.assertFalse(isolated_state.interrupts)
+            self.assertEqual(isolated_state.values, {})
+
+            result = second_app.invoke(
+                Command(resume={"approved": True}),
+                config=interrupted_config,
+            )
+
+            self.assertEqual(get_saved_memories(), ("我喜欢Python",))
+            self.assertEqual(result["messages"][-1].content, "记忆保存成功。")
 
 
 if __name__ == "__main__":

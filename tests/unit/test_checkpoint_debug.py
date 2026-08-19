@@ -65,6 +65,7 @@ class CheckpointDebugTests(unittest.TestCase):
             "snapshot.metadata",
             "snapshot.created_at",
             "snapshot.parent_config",
+            "snapshot.interrupts",
         ):
             self.assertIn(field, rendered)
 

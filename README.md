@@ -19,6 +19,7 @@
 - `ToolNode`：执行 LLM 生成的 Tool Calls。
 - `StateGraph`：编排 AgentNode、ToolNode、条件路由和 ReAct 循环。
 - `SqliteSaver`：按 `thread_id` 将 Checkpoint 保存到本地 SQLite 文件，支持程序重启后恢复会话。
+- `Human-in-the-loop`：`save_memory` 模拟敏感写入在执行前通过 `interrupt()` 请求人工审批。
 - `legacy`：早期手写 Agent 代码，不进入当前运行链。
 
 ## 环境要求
@@ -65,6 +66,16 @@ DEEPSEEK_API_KEY=your-real-key
 /history    从新到旧查看当前会话的 Checkpoint 历史
 ```
 
+当模型选择教学用敏感工具 `save_memory` 时，程序会显示 JSON 审批信息：
+
+```text
+approve    使用 Command(resume={"approved": true}) 批准并继续
+reject     使用 Command(resume={"approved": false, ...}) 拒绝并取消写入
+exit       不处理审批，保留 SQLite 暂停状态后退出
+```
+
+如果在审批时退出，重新启动程序并输入相同 `thread_id`，CLI 会检测 SQLite 中尚未处理的 interrupt，并继续要求审批。`save_memory` 的实际写入只是进程内列表，用于学习副作用边界，不是长期 Memory。
+
 当前 Checkpoint 数据保存在 `data/checkpoints.sqlite`。程序重启后输入相同会话 ID 会恢复原会话；输入新的会话 ID 会创建隔离状态。SQLite Checkpoint 是持久化的会话状态，但仍不等于跨会话的长期 Memory。
 
 ## 测试
@@ -73,7 +84,7 @@ DEEPSEEK_API_KEY=your-real-key
 .venv\Scripts\python -m unittest discover -s tests -t . -v
 ```
 
-默认测试使用 Fake/Mock LLM，不会请求 DeepSeek API，并覆盖同会话恢复、不同会话隔离及原有工具调用循环。
+默认测试使用 Fake/Mock LLM，不会请求 DeepSeek API，并覆盖同会话恢复、不同会话隔离、人工批准/拒绝、跨进程 interrupt 恢复及原有工具调用循环。
 
 ## 项目结构
 

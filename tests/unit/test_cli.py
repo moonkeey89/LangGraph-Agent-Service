@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from langchain_core.messages import AIMessage
+from langgraph.types import Command, Interrupt
 
 from ai_agent_learning.cli import (
     DEFAULT_THREAD_ID,
@@ -80,6 +81,67 @@ class CliTests(unittest.TestCase):
         show_current_state.assert_called_once_with(app, "user_001")
         show_state_history.assert_called_once_with(app, "user_001")
         app.invoke.assert_not_called()
+
+    @patch("builtins.print")
+    @patch("builtins.input", side_effect=["请记住，我喜欢Python", "approve", "exit"])
+    def test_cli_approves_interrupt_with_command_resume(self, _input, _output):
+        app = Mock()
+        app.get_state.return_value.interrupts = ()
+        app.invoke.side_effect = [
+            {
+                "messages": [AIMessage(content="")],
+                "__interrupt__": [
+                    Interrupt(
+                        value={
+                            "action": "save_user_memory",
+                            "tool_name": "save_memory",
+                            "arguments": {"content": "我喜欢Python"},
+                            "message": "是否批准？",
+                        },
+                        id="interrupt-1",
+                    )
+                ],
+            },
+            {"messages": [AIMessage(content="记忆保存成功。")]},
+        ]
+
+        run_cli(app, "thread_hitl_001")
+
+        resume_call = app.invoke.call_args_list[1]
+        self.assertIsInstance(resume_call.args[0], Command)
+        self.assertEqual(resume_call.args[0].resume, {"approved": True})
+        self.assertEqual(
+            resume_call.kwargs["config"],
+            {"configurable": {"thread_id": "thread_hitl_001"}},
+        )
+
+    @patch("builtins.print")
+    @patch("builtins.input", side_effect=["reject", "exit"])
+    def test_cli_resumes_persisted_interrupt_after_restart(self, _input, _output):
+        app = Mock()
+        app.get_state.return_value.interrupts = (
+            Interrupt(
+                value={
+                    "action": "save_user_memory",
+                    "tool_name": "save_memory",
+                    "arguments": {"content": "我喜欢Python"},
+                    "message": "是否批准？",
+                },
+                id="interrupt-1",
+            ),
+        )
+        app.invoke.return_value = {
+            "messages": [AIMessage(content="记忆保存操作已取消。")]
+        }
+
+        run_cli(app, "thread_hitl_003")
+
+        resume_command = app.invoke.call_args.args[0]
+        self.assertIsInstance(resume_command, Command)
+        self.assertEqual(
+            resume_command.resume,
+            {"approved": False, "reason": "用户拒绝"},
+        )
 
     @patch("builtins.input", return_value="")
     def test_empty_session_id_uses_stable_default(self, _input):

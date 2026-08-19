@@ -36,6 +36,8 @@ def show_current_state(graph, thread_id: str):
     print(f"snapshot.created_at: {snapshot.created_at}")
     print("snapshot.parent_config:")
     print(pformat(snapshot.parent_config, sort_dicts=False))
+    print("snapshot.interrupts:")
+    print(pformat(snapshot.interrupts, sort_dicts=False))
 
     return snapshot
 
@@ -64,6 +66,7 @@ def show_state_history(graph, thread_id: str):
             print(f"  最后一条消息类型: {type(last_message).__name__}")
             print(f"  最后一条消息内容: {_format_message_content(last_message)}")
         print(f"  下一步执行节点: {_format_next(snapshot.next)}")
+        print(f"  待处理 interrupt 数量: {len(snapshot.interrupts)}")
         print(f"  checkpoint_id: {configurable.get('checkpoint_id', '<无>')}")
 
     return snapshots
