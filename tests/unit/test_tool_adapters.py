@@ -7,6 +7,7 @@ from ai_agent_learning.tools import (
     get_weather,
     save_memory,
     search_attraction,
+    unstable_tool,
 )
 
 
@@ -42,6 +43,16 @@ class ToolAdapterTests(unittest.TestCase):
 
         skill.assert_called_once_with("北京")
         self.assertEqual(result, attractions)
+
+    def test_unstable_tool_delegates_to_skill(self):
+        with patch(
+            "ai_agent_learning.tools.adapters.unstable_operation_skill",
+            return_value="成功",
+        ) as skill:
+            result = unstable_tool.invoke({"task": "教学任务"})
+
+        skill.assert_called_once_with("教学任务")
+        self.assertEqual(result, "成功")
 
     def test_save_memory_executes_skill_only_after_approval(self):
         with (
@@ -80,7 +91,13 @@ class ToolAdapterTests(unittest.TestCase):
 
         self.assertEqual(
             tool_names,
-            ["get_weather", "calculate", "search_attraction", "save_memory"],
+            [
+                "get_weather",
+                "calculate",
+                "search_attraction",
+                "unstable_tool",
+                "save_memory",
+            ],
         )
         self.assertEqual(len(tool_names), len(set(tool_names)))
 

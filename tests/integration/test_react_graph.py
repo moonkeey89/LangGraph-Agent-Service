@@ -123,19 +123,31 @@ class ReactGraphTests(unittest.TestCase):
         clear_saved_memories()
         self.temporary_directory.cleanup()
 
-    def test_graph_structure_is_unchanged(self):
+    def test_graph_preserves_react_loop_with_recovery_nodes(self):
         app = build_graph(DirectAnswerModel(), TOOLS)
         graph = app.get_graph()
         nodes = set(graph.nodes)
         edges = {(edge.source, edge.target) for edge in graph.edges}
 
-        self.assertEqual(nodes, {"__start__", "agent", "tools", "__end__"})
+        self.assertEqual(
+            nodes,
+            {
+                "__start__",
+                "agent",
+                "tools",
+                "tool_success",
+                "human_review",
+                "failure",
+                "__end__",
+            },
+        )
         self.assertTrue(
             {
                 ("__start__", "agent"),
                 ("agent", "tools"),
                 ("agent", "__end__"),
-                ("tools", "agent"),
+                ("tools", "tool_success"),
+                ("tool_success", "agent"),
             }.issubset(edges)
         )
 

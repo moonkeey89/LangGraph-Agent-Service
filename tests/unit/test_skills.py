@@ -10,11 +10,17 @@ from ai_agent_learning.skills.memory import (
     clear_saved_memories,
     get_saved_memories,
 )
+from ai_agent_learning.skills.unstable import (
+    get_unstable_attempts,
+    reset_unstable_tool,
+    run_unstable_operation,
+)
 
 
 class SkillTests(unittest.TestCase):
     def tearDown(self):
         clear_saved_memories()
+        reset_unstable_tool()
 
     def test_weather_uses_business_data(self):
         self.assertEqual(get_weather("上海"), "小雨，22℃")
@@ -58,6 +64,19 @@ class SkillTests(unittest.TestCase):
 
         self.assertEqual(get_saved_memories(), ("我喜欢Python",))
         self.assertIn("已保存", result)
+
+    def test_unstable_skill_fails_twice_then_succeeds_and_can_reset(self):
+        task = "教学任务"
+
+        with self.assertRaises(TimeoutError):
+            run_unstable_operation(task)
+        with self.assertRaises(TimeoutError):
+            run_unstable_operation(task)
+        self.assertIn("第 3 次尝试", run_unstable_operation(task))
+        self.assertEqual(get_unstable_attempts(task), 3)
+
+        reset_unstable_tool()
+        self.assertEqual(get_unstable_attempts(task), 0)
 
 
 if __name__ == "__main__":

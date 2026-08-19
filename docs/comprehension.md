@@ -1269,3 +1269,282 @@ AgentNode → ToolNode → interrupt
 ```
 
 Graph 节点和边没有改变。HITL 能力来自敏感 Tool 内的动态 interrupt、SQLite Checkpoint 和 CLI 的 Command 恢复协议。
+
+---
+
+## 20. update_state、Replay 与 Time Travel/Fork
+
+### 20.1 三种“继续执行”不是一回事
+
+| 操作 | 解决的问题 | 当前项目调用方式 |
+|---|---|---|
+| Resume | 给当前暂停的 `interrupt()` 提供决定 | `invoke(Command(resume=...), current_config)` |
+| Replay | 从历史状态的 `next` 重新执行 | `invoke(None, selected_snapshot.config)` |
+| Fork | 修改历史状态，创建新 Checkpoint 后继续 | `update_state(...)`，再 `invoke(None, fork_config)` |
+
+Resume 针对的是尚未完成的任务；Replay 不改变选中的历史状态，只从那里重新向前运行；Fork 则先制造一条“如果当时状态不同”的新分支。批准或拒绝仍然只能通过 `Command(resume=...)`，不能借 Replay 代替。
+
+### 20.2 历史列表与序号
+
+`/history` 从新到旧打印：
+
+```text
+Checkpoint #1（最新）
+  checkpoint_id: ...
+  metadata.step: ...
+  metadata.source: ...
+  创建时间: ...
+  最后一条消息: ...
+  下一步执行节点: ...
+```
+
+这里的 `#1` 只是当前列表中的显示序号，方便人在 CLI 中选择；真正定位历史快照的是 `checkpoint_id`。用户输入序号后，程序取回对应的 `StateSnapshot`，后续始终使用它的完整 `snapshot.config`，不会自己拼装或猜测 checkpoint ID。
+
+`metadata.source` 常见值：
+
+```text
+input  → 新输入产生的 Checkpoint
+loop   → Graph 循环中的节点执行产生
+update → update_state() 创建
+fork   → 从历史 Checkpoint 重放时建立分支
+```
+
+### 20.3 Replay 执行哪些节点
+
+Replay 使用：
+
+```python
+graph.invoke(None, selected_snapshot.config)
+```
+
+`None` 表示没有新的 HumanMessage。完整 config 同时包含 `thread_id` 和 `checkpoint_id`：前者定位会话，后者定位该会话中的具体历史状态。如果只传 thread_id，LangGraph 会恢复最新状态，那就不再是从所选历史点重放。
+
+`StateSnapshot` 表示一个 step 开始时的状态，所以执行从 `snapshot.next` 开始：
+
+```text
+next = ("tools",)
+  → 之前生成 tool_call 的 AgentNode 不重跑
+  → ToolNode 重跑
+  → 后续 AgentNode 重跑
+
+next = ("agent",)
+  → 之前的 ToolNode 不重跑
+  → AgentNode 重跑
+```
+
+第一版只允许 calculate：选择 `next=("tools",)` 可以观察 ToolNode 和 AgentNode 重跑；选择 calculate ToolMessage 后的 `next=("agent",)` 可以观察只有 AgentNode 重跑。
+
+### 20.4 Fork 修改什么
+
+当前 `AgentState` 只有 `messages`，因此 Fork 不新增教学专用字段，而是修改 calculate 返回的 `ToolMessage`。程序要求选择满足以下条件的快照：
+
+```text
+最后一条消息是 name="calculate" 的 ToolMessage
+next = ("agent",)
+没有 pending interrupt
+```
+
+例如把工具结果从 `42` 修改为 `43`。替换消息保留原 `id`、`tool_call_id` 和其他字段，只改变 `content`：
+
+```python
+replacement_message = original_message.model_copy(
+    update={"content": "43"}
+)
+fork_config = graph.update_state(
+    selected_snapshot.config,
+    {"messages": [replacement_message]},
+    as_node="tools",
+)
+result = graph.invoke(None, fork_config)
+```
+
+`messages` 使用 `add_messages` reducer。相同消息 ID 表示替换原位置；新 ID 则表示追加。如果错误地创建一个新 ID，就会同时留下 `42` 和 `43` 两条互相冲突的 ToolMessage，而不是修改历史观察值。
+
+这里明确使用 `as_node="tools"`，因为这条人工状态更新在语义上模拟 ToolNode 的输出。LangGraph 因此沿现有的 `tools → agent` 边安排后继节点。如果省略 `as_node`，框架需要猜测更新来自哪个节点，在包含 agent 和 tools 的循环图中不够清晰。
+
+### 20.5 新分支不会覆盖旧历史
+
+`update_state()` 返回一个新的 `RunnableConfig`，其中含有新 Checkpoint 的 `checkpoint_id`。旧 `selected_snapshot.config` 仍指向原来结果为 `42` 的快照，新 `fork_config` 指向结果为 `43` 的更新快照：
+
+```text
+历史 Checkpoint（42）
+├── 原执行 → 最终回答 42
+└── update_state（43，source=update）
+      └── invoke(None, fork_config) → 最终回答 43
+```
+
+后续必须使用 `fork_config`，否则无法明确告诉 LangGraph 从刚创建的分支继续。原历史和新分支都由 SqliteSaver 保存；关闭程序再打开同一个 `data/checkpoints.sqlite`，它们仍能通过各自 checkpoint ID 被读取。
+
+### 20.6 副作用安全边界
+
+Time Travel 会重新执行节点，所以不能假设历史工具已经执行过就不会再执行。当前安全规则是：
+
+- 只将 `calculate` 放入 Replay 白名单；
+- 含 pending interrupt 的快照必须使用 Resume，拒绝 Replay；
+- 即将执行 `save_memory` 或无法识别工具的快照直接拒绝；
+- Fork 只允许替换 calculate 的 ToolMessage；
+- Replay/Fork 后若 Agent 新生成敏感调用，`interrupt()` 仍会暂停，CLI 不自动批准；
+- thread_id 必须与快照 config 中的 thread_id 相同，禁止跨线程使用快照。
+
+SQLite 保存 Graph 状态不等于业务操作具有 exactly-once 语义。未来如果工具会支付、发邮件或写业务数据库，还需要幂等键、唯一约束和业务事务；这些不属于本阶段。
+
+---
+
+## 21. 错误分类、有限重试与失败降级
+
+### 21.1 改造前各工具怎样处理错误
+
+| 工具/边界 | 可能的错误 | 原处理方式 |
+|---|---|---|
+| calculate Skill | 语法、类型、除零、溢出 | Skill 内转换为“无法计算”，不会抛给 Graph |
+| weather | 不支持的城市 | 返回业务提示 |
+| search_attraction | 找不到城市 | 返回业务提示 |
+| LangChain Tool 参数校验 | 缺字段、字段类型错误 | ToolNode 默认只把参数校验错误转换为错误 ToolMessage |
+| save_memory | `interrupt()` 暂停；批准后的写入异常 | Graph interrupt 正常向外冒泡；其他异常原来会到 CLI 总异常边界 |
+| AgentNode/LLM | 网络、认证、限流等 | 原来由 CLI 记录日志并输出统一失败提示 |
+
+本阶段聚焦“工具执行边界”。LLM 调用错误仍由 CLI 最外层保护，不与工具副作用重试混为一套策略。
+
+### 21.2 为什么要先分类
+
+```text
+transient
+  TimeoutError、ConnectionError、限流等
+  → 可以有限重试
+
+invalid_arguments
+  Tool schema、ValueError、TypeError
+  → 返回错误 ToolMessage 给 Agent 修改参数
+
+permission
+  PermissionError、认证失败
+  → 不自动重试
+
+permanent
+  明确永久失败或未知异常
+  → 不自动重试，生成失败说明
+
+side_effect_unknown
+  写操作可能已经成功，但调用方没有收到确定结果
+  → 绝不能盲目重试
+```
+
+代码虽然在 ToolNode wrapper 使用 `except Exception` 作为工具边界，但没有把所有异常视为 transient：`GraphBubbleUp` 被明确重新抛出，已知异常逐类判断，未知异常保守归入 permanent。CLI 的宽泛异常捕获只是最后日志边界，也不会触发自动重试。
+
+### 21.3 AgentState 新字段
+
+```text
+status       当前执行状态
+error        可读错误信息
+error_type   五类错误之一
+failed_node  当前为 tools
+retry_count  已失败的自动执行次数
+max_retries  当前固定为 3
+```
+
+只有 `messages` 继续使用 `add_messages` reducer；这些标量字段由节点用新值覆盖。初始 AgentNode 写入 `retry_count=0`。第一次临时失败写入 1，第二次写入 2，第三次失败写入 3 并进入人工复核。也就是说，教学版的 `max_retries=3` 表示最多自动执行三次，而不是无限重试。
+
+每次 ToolNode 失败都会形成 SQLite Checkpoint，因此进程在第一次失败后退出，重新打开相同 SQLite 并使用相同 thread_id，仍会恢复 `retry_count=1`、错误类别和下一步节点。
+
+### 21.4 为什么仍然使用 ToolNode
+
+当前 LangGraph 的 ToolNode 支持 `wrap_tool_call`。项目没有重新实现参数注入、ToolMessage 绑定和 interrupt 传播，而是在真实 ToolNode 的单次工具调用边界增加 `tool_error_boundary`：
+
+```text
+ToolNode
+  → tool_error_boundary(request, execute)
+      → execute(request)
+      ├── 成功：返回 ToolMessage
+      ├── GraphBubbleUp：重新抛出，保留 interrupt 语义
+      └── 普通异常：分类并用 Command(update=...) 写入 State
+```
+
+失败 ToolMessage 使用稳定消息 ID。同一 tool_call 的后续重试会替换上一次错误观察，而不是为一个 tool_call 追加多条互相冲突的 ToolMessage。
+
+### 21.5 条件路由
+
+```text
+AgentNode
+  → ToolNode
+      ├── success
+      │     → tool_success
+      │     → 清空 error/error_type/failed_node
+      │     → retry_count=0
+      │     → AgentNode
+      │
+      ├── retry
+      │     → ToolNode（只重跑工具边界）
+      │
+      ├── agent_correction
+      │     → AgentNode（LLM 读取错误 ToolMessage 并修改参数）
+      │
+      ├── human_review
+      │     → interrupt(retry/cancel)
+      │
+      └── fail
+            → failure 节点生成明确说明
+            → END
+```
+
+正常 ReAct 的核心仍是 AgentNode 决策、ToolNode 执行、结果回到 AgentNode；`tool_success` 只是清理错误状态，`human_review` 和 `failure` 是故障分支。
+
+### 21.6 unstable_tool
+
+`unstable_tool` 对应的 Skill 使用进程内计数器模拟临时故障：同一任务前两次固定抛出 TimeoutError，第三次返回成功。它不访问网络、不写业务数据库，计数器只用于确定性教学测试，并提供 reset 函数。
+
+执行过程：
+
+```text
+retry_count=0
+  → attempt 1 TimeoutError
+  → retry_count=1，Checkpoint，route=retry
+  → attempt 2 TimeoutError
+  → retry_count=2，Checkpoint，route=retry
+  → attempt 3 成功
+  → tool_success 清理错误，retry_count=0
+  → AgentNode 生成最终回答
+```
+
+普通工具重试没有使用 Replay。Replay 会从历史 Checkpoint 重跑其后的所有节点，可能重复 LLM 调用、其他工具或无关步骤；错误恢复只应重跑明确失败且确认无副作用的工具调用边界。
+
+### 21.7 超限后的 interrupt
+
+第三次临时失败后，Graph 路由到 human_review：
+
+```python
+interrupt(
+    {
+        "failed_node": "tools",
+        "error": "...",
+        "retry_count": 3,
+        "max_retries": 3,
+        "options": ["retry", "cancel"],
+    }
+)
+```
+
+SQLite 保存当前 State、失败 ToolMessage、human_review 任务和 Interrupt。退出程序后用同一 thread_id 可以继续：
+
+```text
+Command(resume={"action": "retry"})
+  → route=retry
+  → ToolNode 再执行一次
+
+Command(resume={"action": "cancel", "reason": "..."})
+  → 添加取消说明
+  → END
+  → ToolNode 不再执行
+```
+
+### 21.8 副作用工具为何不自动重试
+
+`save_memory` 仍然先 interrupt、批准后才写入。工具边界明确把它标记为副作用工具：如果批准后的执行出现超时等“不知道是否已写入”的情况，错误类型会被提升为 `side_effect_unknown`，直接进入 fail，不走 retry。
+
+```text
+写入请求已发出
+  → 对方可能已成功
+  → 本地收到 TimeoutError
+  → 盲目重试可能写两次
+```
+
+真实工程还要使用幂等键、唯一约束和事务。本阶段只是保证自动恢复层不会替用户做危险的重复执行。

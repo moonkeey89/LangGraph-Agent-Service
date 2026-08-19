@@ -1,14 +1,16 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 
 from ai_agent_learning.cli import (
     DEFAULT_THREAD_ID,
     create_agent_app,
     prompt_thread_id,
+    run_fork_command,
     run_cli,
+    run_replay_command,
 )
 
 
@@ -82,6 +84,82 @@ class CliTests(unittest.TestCase):
         show_state_history.assert_called_once_with(app, "user_001")
         app.invoke.assert_not_called()
 
+    @patch("ai_agent_learning.cli.replay_checkpoint")
+    @patch("ai_agent_learning.cli.validate_replay_checkpoint")
+    @patch("ai_agent_learning.cli.show_state_history")
+    @patch("builtins.input", return_value="1")
+    def test_replay_command_selects_checkpoint_by_display_sequence(
+        self,
+        _input,
+        show_state_history,
+        validate_replay_checkpoint,
+        replay_checkpoint,
+    ):
+        app = Mock()
+        snapshot = Mock()
+        snapshot.config = {
+            "configurable": {
+                "thread_id": "user_001",
+                "checkpoint_id": "checkpoint-001",
+            }
+        }
+        snapshot.next = ("tools",)
+        show_state_history.return_value = [snapshot]
+        replay_checkpoint.return_value = {
+            "messages": [AIMessage(content="计算结果是 42")]
+        }
+
+        run_replay_command(app, "user_001")
+
+        validate_replay_checkpoint.assert_called_once_with(snapshot, "user_001")
+        replay_checkpoint.assert_called_once_with(app, snapshot, "user_001")
+
+    @patch("ai_agent_learning.cli.fork_calculation_result")
+    @patch("ai_agent_learning.cli.validate_fork_checkpoint")
+    @patch("ai_agent_learning.cli.show_state_history")
+    @patch("builtins.input", side_effect=["1", "43"])
+    def test_fork_command_uses_selected_checkpoint_and_new_result(
+        self,
+        _input,
+        show_state_history,
+        validate_fork_checkpoint,
+        fork_calculation_result,
+    ):
+        app = Mock()
+        snapshot = Mock()
+        snapshot.config = {
+            "configurable": {
+                "thread_id": "user_001",
+                "checkpoint_id": "checkpoint-001",
+            }
+        }
+        show_state_history.return_value = [snapshot]
+        validate_fork_checkpoint.return_value = ToolMessage(
+            content="42",
+            tool_call_id="call-1",
+            name="calculate",
+            id="tool-message-1",
+        )
+        fork_calculation_result.return_value = (
+            {
+                "configurable": {
+                    "thread_id": "user_001",
+                    "checkpoint_id": "checkpoint-002",
+                }
+            },
+            {"messages": [AIMessage(content="计算结果是 43")]},
+        )
+
+        run_fork_command(app, "user_001")
+
+        validate_fork_checkpoint.assert_called_once_with(snapshot, "user_001")
+        fork_calculation_result.assert_called_once_with(
+            app,
+            snapshot,
+            "user_001",
+            "43",
+        )
+
     @patch("builtins.print")
     @patch("builtins.input", side_effect=["请记住，我喜欢Python", "approve", "exit"])
     def test_cli_approves_interrupt_with_command_resume(self, _input, _output):
@@ -141,6 +219,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(
             resume_command.resume,
             {"approved": False, "reason": "用户拒绝"},
+        )
+
+    @patch("builtins.print")
+    @patch("builtins.input", side_effect=["retry", "exit"])
+    def test_cli_resumes_retry_review_with_command(self, _input, _output):
+        app = Mock()
+        app.get_state.return_value.interrupts = (
+            Interrupt(
+                value={
+                    "action": "tool_failure_review",
+                    "failed_node": "tools",
+                    "error": "模拟超时",
+                    "retry_count": 3,
+                    "options": ["retry", "cancel"],
+                },
+                id="retry-interrupt-1",
+            ),
+        )
+        app.invoke.return_value = {
+            "messages": [AIMessage(content="人工重试后成功")]
+        }
+
+        run_cli(app, "retry_thread")
+
+        resume_command = app.invoke.call_args.args[0]
+        self.assertIsInstance(resume_command, Command)
+        self.assertEqual(resume_command.resume, {"action": "retry"})
+        self.assertEqual(
+            app.invoke.call_args.kwargs["config"],
+            {"configurable": {"thread_id": "retry_thread"}},
         )
 
     @patch("builtins.input", return_value="")

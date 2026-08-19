@@ -6,6 +6,7 @@ from ai_agent_learning.skills import (
     get_weather as get_weather_skill,
     save_memory as save_memory_skill,
     search_attraction as search_attraction_skill,
+    run_unstable_operation as unstable_operation_skill,
 )
 
 
@@ -28,6 +29,13 @@ def search_attraction(city: str) -> list[str] | str:
     """查询指定城市的旅游景点。"""
 
     return search_attraction_skill(city)
+
+
+@tool
+def unstable_tool(task: str) -> str:
+    """执行无副作用的教学任务；临时超时时由Graph进行有限重试。"""
+
+    return unstable_operation_skill(task)
 
 
 @tool
@@ -58,5 +66,6 @@ TOOLS = [
     get_weather,
     calculate,
     search_attraction,
+    unstable_tool,
     save_memory,
 ]

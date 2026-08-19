@@ -66,6 +66,7 @@ class CheckpointDebugTests(unittest.TestCase):
             "snapshot.created_at",
             "snapshot.parent_config",
             "snapshot.interrupts",
+            "snapshot.tasks",
         ):
             self.assertIn(field, rendered)
 
@@ -101,6 +102,10 @@ class CheckpointDebugTests(unittest.TestCase):
         self.assertIn("最后一条消息内容: 计算结果是 42", rendered)
         self.assertIn("下一步执行节点: agent", rendered)
         self.assertIn("checkpoint_id: checkpoint-002", rendered)
+        self.assertIn("metadata.step: 1", rendered)
+        self.assertIn("metadata.source: loop", rendered)
+        self.assertIn("retry_count: <无>", rendered)
+        self.assertIn("tasks: ()", rendered)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from ai_agent_learning.tools.adapters import (
     get_weather,
     save_memory,
     search_attraction,
+    unstable_tool,
 )
 
 
@@ -13,4 +14,5 @@ __all__ = [
     "calculate",
     "save_memory",
     "search_attraction",
+    "unstable_tool",
 ]

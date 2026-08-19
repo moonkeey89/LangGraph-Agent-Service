@@ -21,6 +21,16 @@ def _format_next(next_nodes: tuple[str, ...]) -> str:
     return ", ".join(next_nodes) if next_nodes else "END"
 
 
+def _metadata_value(snapshot, key: str):
+    metadata = snapshot.metadata or {}
+    return metadata.get(key, "<无>")
+
+
+def _checkpoint_id(snapshot) -> str:
+    configurable = snapshot.config.get("configurable", {})
+    return configurable.get("checkpoint_id", "<无>")
+
+
 def show_current_state(graph, thread_id: str):
     """打印并返回指定线程的最新 StateSnapshot。"""
     snapshot = graph.get_state(_thread_config(thread_id))
@@ -38,6 +48,8 @@ def show_current_state(graph, thread_id: str):
     print(pformat(snapshot.parent_config, sort_dicts=False))
     print("snapshot.interrupts:")
     print(pformat(snapshot.interrupts, sort_dicts=False))
+    print("snapshot.tasks:")
+    print(pformat(snapshot.tasks, sort_dicts=False))
 
     return snapshot
 
@@ -55,10 +67,15 @@ def show_state_history(graph, thread_id: str):
         values = snapshot.values if isinstance(snapshot.values, dict) else {}
         messages = values.get("messages", [])
         last_message = messages[-1] if messages else None
-        configurable = snapshot.config.get("configurable", {})
-
         print(f"\nCheckpoint #{index}{'（最新）' if index == 1 else ''}")
+        print(f"  checkpoint_id: {_checkpoint_id(snapshot)}")
+        print(f"  metadata.step: {_metadata_value(snapshot, 'step')}")
+        print(f"  metadata.source: {_metadata_value(snapshot, 'source')}")
         print(f"  创建时间: {snapshot.created_at}")
+        print(f"  status: {values.get('status', '<无>')}")
+        print(f"  error_type: {values.get('error_type', '<无>')}")
+        print(f"  retry_count: {values.get('retry_count', '<无>')}")
+        print(f"  max_retries: {values.get('max_retries', '<无>')}")
         print(f"  消息数量: {len(messages)}")
         if last_message is None:
             print("  最后一条消息: <无>")
@@ -67,6 +84,6 @@ def show_state_history(graph, thread_id: str):
             print(f"  最后一条消息内容: {_format_message_content(last_message)}")
         print(f"  下一步执行节点: {_format_next(snapshot.next)}")
         print(f"  待处理 interrupt 数量: {len(snapshot.interrupts)}")
-        print(f"  checkpoint_id: {configurable.get('checkpoint_id', '<无>')}")
+        print(f"  tasks: {pformat(snapshot.tasks, sort_dicts=False)}")
 
     return snapshots
