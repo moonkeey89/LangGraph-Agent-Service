@@ -4,7 +4,11 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-from ai_agent_learning.agent import build_graph
+from ai_agent_learning.agent import (
+    build_graph,
+    show_current_state,
+    show_state_history,
+)
 from ai_agent_learning.config import Settings
 from ai_agent_learning.llm import create_llm
 from ai_agent_learning.logging_config import configure_logging
@@ -47,6 +51,17 @@ def run_cli(app, thread_id: str) -> None:
             return
 
         if not user_input:
+            continue
+
+        if user_input.lower() in {"/state", "/history"}:
+            try:
+                if user_input.lower() == "/state":
+                    show_current_state(app, thread_id)
+                else:
+                    show_state_history(app, thread_id)
+            except Exception:
+                logger.exception("Checkpoint inspection failed")
+                print("状态查看失败，请检查当前 Graph 是否配置了 Checkpointer。")
             continue
 
         try:

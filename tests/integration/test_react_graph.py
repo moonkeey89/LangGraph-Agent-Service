@@ -113,6 +113,35 @@ class ReactGraphTests(unittest.TestCase):
         )
         self.assertEqual(result["messages"][-1].content, "计算结果是 42")
 
+        history = list(
+            app.get_state_history(
+                {"configurable": {"thread_id": "user_001"}}
+            )
+        )
+        self.assertTrue(
+            any(
+                snapshot.next == ("tools",)
+                and isinstance(snapshot.values["messages"][-1], AIMessage)
+                and snapshot.values["messages"][-1].tool_calls
+                for snapshot in history
+            )
+        )
+        self.assertTrue(
+            any(
+                snapshot.next == ("agent",)
+                and isinstance(snapshot.values["messages"][-1], ToolMessage)
+                for snapshot in history
+            )
+        )
+        self.assertTrue(
+            any(
+                snapshot.next == ()
+                and snapshot.values.get("messages")
+                and snapshot.values["messages"][-1].content == "计算结果是 42"
+                for snapshot in history
+            )
+        )
+
     def test_same_thread_restores_conversation_messages(self):
         app = build_graph(
             NameMemoryModel(),

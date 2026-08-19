@@ -65,6 +65,23 @@ class CliTests(unittest.TestCase):
                 {"configurable": {"thread_id": "user_001"}},
             )
 
+    @patch("ai_agent_learning.cli.show_state_history")
+    @patch("ai_agent_learning.cli.show_current_state")
+    @patch("builtins.input", side_effect=["/state", "/history", "exit"])
+    def test_checkpoint_commands_do_not_invoke_agent(
+        self,
+        _input,
+        show_current_state,
+        show_state_history,
+    ):
+        app = Mock()
+
+        run_cli(app, "user_001")
+
+        show_current_state.assert_called_once_with(app, "user_001")
+        show_state_history.assert_called_once_with(app, "user_001")
+        app.invoke.assert_not_called()
+
     @patch("builtins.input", return_value="")
     def test_empty_session_id_uses_stable_default(self, _input):
         self.assertEqual(prompt_thread_id(), DEFAULT_THREAD_ID)

@@ -58,6 +58,13 @@ DEEPSEEK_API_KEY=your-real-key
 
 程序启动后先输入会话 ID；直接回车会使用 `default`。一次进程运行期间，同一会话 ID 会恢复之前的消息，不同会话 ID 的状态相互隔离。输入 `exit` 或 `quit` 退出。
 
+会话过程中可以输入以下调试命令，它们只读取 Checkpoint，不会发送给 LLM：
+
+```text
+/state      查看当前会话的最新 StateSnapshot
+/history    从新到旧查看当前会话的 Checkpoint 历史
+```
+
 当前使用进程内 Checkpointer，程序退出后状态会丢失；它不是数据库或长期记忆。
 
 ## 测试
@@ -76,7 +83,7 @@ src/ai_agent_learning/
 ├── config.py           # 配置加载和校验
 ├── llm.py              # DeepSeek LLM 创建
 ├── logging_config.py   # 标准日志初始化
-├── agent/              # State、AgentNode 和 Graph Builder
+├── agent/              # State、AgentNode、Graph Builder 和 Checkpoint 调试
 ├── tools/              # LangChain Tool 适配层
 └── skills/             # 业务能力
 

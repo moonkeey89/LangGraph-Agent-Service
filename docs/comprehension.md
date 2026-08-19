@@ -1003,3 +1003,71 @@ AgentNode 和 ToolNode 不需要自己读写 Checkpoint。状态恢复和保存�
 - `add_messages` 决定新旧消息怎样合并；没有正确 reducer 时，新输入可能覆盖历史列表。
 - `InMemorySaver` 只适合当前教学阶段和单进程测试；进程退出后不会保留数据。
 - Checkpoint 保存图状态，长期 Memory 则解决跨会话的事实、偏好与知识沉淀，两者不能混为一谈。
+
+### 17.5 查看当前 StateSnapshot
+
+当前项目把只读调试功能放在 `agent/checkpoint_debug.py`，不会让 AgentNode 或 ToolNode 负责观察 Checkpoint：
+
+```text
+show_current_state(graph, thread_id)
+    → graph.get_state(config)
+    → 输出最新 StateSnapshot 的主要字段
+
+show_state_history(graph, thread_id)
+    → graph.get_state_history(config)
+    → 从新到旧输出历史快照摘要
+```
+
+`StateSnapshot` 表示图在某个执行步骤开始时的状态快照，当前使用的字段含义如下：
+
+| 字段 | 含义 |
+| --- | --- |
+| `values` | 当前各 State channel 的值；本项目主要是完整的 `messages` |
+| `next` | 从该快照继续执行时的下一个节点；空元组表示图已结束 |
+| `config` | 定位当前快照的配置，通常包含 `thread_id`、`checkpoint_ns` 和 `checkpoint_id` |
+| `metadata` | 快照来源、执行步数、节点写入以及父图信息等运行元数据 |
+| `created_at` | Checkpoint 创建时间 |
+| `parent_config` | 上一个 Checkpoint 的定位配置；可用来理解快照之间的父子关系 |
+
+历史摘要额外提取了：
+
+```text
+Checkpoint 序号
+创建时间
+messages 数量
+最后一条消息的类型与内容
+next 指向的执行节点
+checkpoint_id
+```
+
+CLI 中可以直接输入：
+
+```text
+/state
+    查看当前 thread_id 的最新完整状态
+
+/history
+    查看当前 thread_id 的历史快照摘要
+```
+
+这两个命令会在 CLI 边界被识别，不会作为 HumanMessage 发送给 LLM，也不会创建新的对话消息。
+
+### 17.6 从历史快照观察一次工具调用
+
+例如输入“计算 6 * 7”后，`/history` 会从新到旧显示快照。按实际执行时间从旧到新理解，可以看到：
+
+```text
+HumanMessage("计算 6 * 7")
+    next = agent
+        ↓
+AIMessage(tool_calls=[calculate])
+    next = tools
+        ↓
+ToolMessage("42")
+    next = agent
+        ↓
+AIMessage("计算结果是 42")
+    next = END
+```
+
+这里的 `next` 特别适合学习图的控制流：消息说明“状态里已经有什么”，`next` 说明“接下来准备执行谁”。因此历史快照不仅是聊天记录，也是一条可用于调试的 Graph 执行轨迹。
