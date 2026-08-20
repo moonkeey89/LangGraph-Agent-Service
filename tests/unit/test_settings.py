@@ -17,6 +17,11 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.deepseek_model, "deepseek-chat")
         self.assertEqual(settings.deepseek_base_url, "https://api.deepseek.com")
         self.assertIsNone(settings.deepseek_temperature)
+        self.assertEqual(
+            settings.memory_embedding_model,
+            "minishlab/potion-multilingual-128M",
+        )
+        self.assertEqual(settings.memory_embedding_dimensions, 256)
         self.assertEqual(settings.log_level, "INFO")
         self.assertNotIn("test-secret-key", repr(settings))
 
@@ -26,6 +31,8 @@ class SettingsTests(unittest.TestCase):
             "DEEPSEEK_MODEL": "configured-model",
             "DEEPSEEK_BASE_URL": "https://example.com",
             "DEEPSEEK_TEMPERATURE": "0.2",
+            "MEMORY_EMBEDDING_MODEL": "test/embedding-model",
+            "MEMORY_EMBEDDING_DIMENSIONS": "128",
             "LOG_LEVEL": "debug",
         }
 
@@ -39,6 +46,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.deepseek_model, "configured-model")
         self.assertEqual(settings.deepseek_base_url, "https://example.com")
         self.assertEqual(settings.deepseek_temperature, 0.2)
+        self.assertEqual(settings.memory_embedding_model, "test/embedding-model")
+        self.assertEqual(settings.memory_embedding_dimensions, 128)
         self.assertEqual(settings.log_level, "DEBUG")
 
     def test_api_key_is_required(self):
@@ -52,6 +61,14 @@ class SettingsTests(unittest.TestCase):
                 _env_file=None,
                 deepseek_api_key="test-secret-key",
                 log_level="verbose",
+            )
+
+    def test_embedding_dimensions_must_be_positive(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                deepseek_api_key="test-secret-key",
+                memory_embedding_dimensions=0,
             )
 
 

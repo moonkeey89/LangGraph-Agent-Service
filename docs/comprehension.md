@@ -1139,7 +1139,7 @@ SQLite 让短期记忆具有了持久性，但没有改变它的作用域：
     → 状态隔离
 
 长期用户偏好
-    → 当前阶段未实现
+    → 由独立 SqliteStore 按 user_id 保存
 ```
 
 数据库文件包含用户对话，应当视为本地敏感数据。项目通过 `.gitignore` 忽略 `data/*.sqlite` 及其辅助文件，只提交 `data/.gitkeep`，不把真实会话状态推送到 Git。
@@ -1148,7 +1148,7 @@ SQLite 让短期记忆具有了持久性，但没有改变它的作用域：
 
 ## 19. interrupt 与人工审批
 
-### 19.1 为什么新增模拟 save_memory
+### 19.1 为什么需要 save_memory
 
 改造前的 Tool 清单只有：
 
@@ -1158,7 +1158,7 @@ calculate
 search_attraction
 ```
 
-它们都是查询或计算能力，不适合演示“批准之后才发生写入”。项目虽然有 `get_current_time` Skill，但它没有注册为 Tool，也不是敏感操作。因此新增教学用 `save_memory`：Skill 把内容追加到进程内列表，用来产生可验证的真实副作用，但不实现跨进程长期记忆。
+它们都是查询或计算能力，不适合演示“批准之后才发生写入”。项目先用进程内列表教学 HITL，当前阶段已经把该列表替换为持久化 `SqliteStore`。`save_memory` 现在会在明确意图检查、敏感信息检查和人工批准之后，按 `user_id` 保存真正的长期记忆。
 
 ### 19.2 interrupt 在哪里
 
@@ -1169,15 +1169,25 @@ decision = interrupt(
     {
         "action": "save_user_memory",
         "tool_name": "save_memory",
-        "arguments": {"content": content},
-        "message": "该操作将写入一条模拟记忆，是否批准？",
+        "arguments": {
+            "content": explicit_content,
+            "memory_type": memory_type,
+        },
+        "message": "该操作将写入一条长期记忆，是否批准？",
     }
 )
 
 if decision.get("approved") is not True:
     return "保存操作已取消"
 
-return save_memory_skill(content)
+return save_memory_skill(
+    runtime.store,
+    user_id=runtime.context.user_id,
+    memory_id=runtime.tool_call_id,
+    content=explicit_content,
+    memory_type=memory_type,
+    source_thread_id=thread_id,
+)
 ```
 
 `interrupt()` 的 payload 只包含字符串、布尔值和字典，因此可以被 JSON 序列化。真正产生副作用的 `save_memory_skill()` 位于 interrupt 之后。
@@ -1199,7 +1209,7 @@ HumanMessage("请记住，我喜欢Python")
       Checkpoint 父子关系
 ```
 
-此时没有调用 Skill，所以模拟记忆列表仍然为空。`graph.get_state(config)` 的 `snapshot.next` 是 `("tools",)`，`snapshot.interrupts` 中包含待审批信息。
+此时没有调用 Skill，所以长期记忆 Store 中仍然没有新记录。`graph.get_state(config)` 的 `snapshot.next` 是 `("tools",)`，`snapshot.interrupts` 中包含待审批信息。
 
 ### 19.4 CLI 如何恢复
 
@@ -1211,16 +1221,17 @@ graph.invoke({messages: [HumanMessage]}, config)
     → 返回 __interrupt__
 
 批准：
-graph.invoke(Command(resume={"approved": True}), config)
+graph.invoke(Command(resume={"approved": True}), config, context=context)
 
 拒绝：
 graph.invoke(
     Command(resume={"approved": False, "reason": "用户拒绝"}),
     config,
+    context=context,
 )
 ```
 
-CLI 会循环处理 interrupt，直到 Graph 完成或用户输入 `exit`。如果用户在审批时退出，下一次使用相同 thread_id 启动时，CLI 通过 `graph.get_state(config).interrupts` 找到 SQLite 中的待审批任务，再发送 Command 恢复。
+CLI 会循环处理 interrupt，直到 Graph 完成或用户输入 `exit`。如果用户在审批时退出，下一次使用相同 `user_id` 和 `thread_id` 启动时，CLI 通过 `graph.get_state(config).interrupts` 找到 SQLite 中的待审批任务，再带同一个 Runtime Context 发送 Command 恢复。
 
 批准或拒绝都不是一条新的对话内容，所以不能包装为 HumanMessage。HumanMessage 会让 Graph 从输入边界开始一次新运行，LLM 可能重新规划工具；`Command(resume=...)` 则把数据交还给原来那个 interrupt 调用点。
 
@@ -1247,7 +1258,7 @@ Command 本身不携带“恢复哪个任务”的完整位置。LangGraph 使�
   → 根据 approved 决定是否调用 Skill
 ```
 
-当前 interrupt 之前只有字典构造等无副作用操作。真正的列表写入在 interrupt 之后，所以普通的暂停和恢复不会重复写入。
+当前 interrupt 之前只有意图、安全检查和字典构造等无副作用操作。真正的 Store 写入在 interrupt 之后，并使用稳定 `tool_call_id` 作为 memory_id，所以普通暂停恢复不会新增重复记录。
 
 但需要理解更严格的工程边界：如果进程恰好在“外部写入已经成功、LangGraph 尚未保存写入后的 Checkpoint”之间崩溃，恢复仍可能再次执行写入。真实支付、发邮件或数据库更新还需要幂等键、唯一约束或业务事务；interrupt 本身不提供分布式 exactly-once 保证。
 
@@ -1548,3 +1559,169 @@ Command(resume={"action": "cancel", "reason": "..."})
 ```
 
 真实工程还要使用幂等键、唯一约束和事务。本阶段只是保证自动恢复层不会替用户做危险的重复执行。
+
+---
+
+## 22. 跨 thread 长期记忆第一阶段
+
+### 22.1 先区分 Checkpoint 和长期记忆
+
+本阶段将早期用于 HITL 教学的进程内模拟列表替换为真正的持久化长期记忆。两套 SQLite 的职责不同：
+
+```text
+data/checkpoints.sqlite
+  → SqliteSaver
+  → key 是 thread_id
+  → 保存 messages、执行位置、interrupt、retry_count 和 Checkpoint 分支
+
+data/memories.sqlite
+  → SqliteStore
+  → namespace 包含 user_id
+  → 保存用户明确要求长期记住的简洁事实及向量索引
+```
+
+同一 `thread_id` 用来恢复同一段 Graph 会话；同一 `user_id` 的多个不同 thread 则共享长期记忆。更换 thread 后，旧 thread 的 HumanMessage 不会自动进入新 State，但 `search_memory` 仍能访问同一用户的 Memory namespace。
+
+### 22.2 user_id 为什么放在 Runtime Context
+
+如果把 `user_id` 定义成普通 Tool 参数，LLM 就可能生成：
+
+```json
+{"query": "编程语言", "user_id": "另一个用户"}
+```
+
+当前 Graph 使用：
+
+```python
+StateGraph(AgentState, context_schema=AgentContext)
+```
+
+应用调用时分别传递：
+
+```python
+config = {"configurable": {"thread_id": thread_id}}
+context = AgentContext(user_id=user_id)
+graph.invoke(input, config=config, context=context)
+```
+
+Tool 声明 `runtime: ToolRuntime[...]`，ToolNode 自动注入 Runtime。暴露给 LLM 的 schema 中没有 `runtime`、`store` 或 `user_id`：
+
+```text
+save_memory  → content, memory_type
+search_memory → query
+list_memories → 无参数
+delete_memory → memory_id
+```
+
+因此 namespace 只能由应用提供的可信 `runtime.context.user_id` 构造，不能由模型选择。
+
+### 22.3 Store namespace 才是隔离边界
+
+每个用户使用独立 namespace：
+
+```python
+("ai_agent_learning", "users", user_id, "memories")
+```
+
+`search_memory`、`list_memories` 和 `delete_memory` 都先构造这个精确 namespace，再执行查询或更新。`user_id` 虽然也保存在记录中用于调试，但隔离不能只依赖 metadata filter，因为调用者可能忘记过滤；namespace 是更稳定的访问边界。
+
+每条记录包含：
+
+```text
+memory_id
+content
+user_id
+memory_type
+source=user_explicit
+source_thread_id
+created_at
+updated_at
+status=active/deleted
+```
+
+删除采用软删除：只在当前用户 namespace 查找目标，将 `status` 改成 `deleted`。搜索和列表固定过滤 `status=active`，所以已删除记忆不会再次返回；另一个用户即使知道 memory_id，也无法访问原用户 namespace。
+
+### 22.4 为什么保存不能只相信 LLM
+
+第一版不做自动 Memory Manager。即使模型误调用 `save_memory`，Tool 也会反向查找当前 State 中最近的 HumanMessage，并确定性检查是否存在“请记住”“帮我记住”“记住这件事”等明确表达。
+
+```text
+普通问题
+  → 即使模型调用 save_memory
+  → 策略检查失败
+  → 不 interrupt、不写入
+
+明确保存请求
+  → 从原 HumanMessage 提取“请记住”之后的事实
+  → 不把 LLM 提供的 content 当成用户授权证据
+  → 检查长度和敏感凭据
+  → interrupt 等待人工批准
+  → 批准后 Skill 才执行 store.put()
+```
+
+API Key、密码、验证码、访问令牌、私钥等内容在 interrupt 前直接拒绝。这样审批界面也不会鼓励保存明显敏感的凭据。
+
+### 22.5 Model2Vec 语义检索
+
+项目没有假设 DeepSeek 提供 Embedding。聊天模型仍由 `llm.py` 创建，长期记忆使用独立的本地多语言模型：
+
+```text
+模型：minishlab/potion-multilingual-128M
+实现：Model2Vec 静态多语言 Embedding
+维度：256
+费用：不需要付费 API Key
+下载：第一次真正保存或搜索时下载到 Hugging Face 本机缓存
+后续：复用缓存，不随项目 Git 提交
+```
+
+`SqliteStore` 只索引记录中的 `content` 字段。搜索顺序是：
+
+```text
+runtime.context.user_id
+  → 精确 Memory namespace
+  → filter status=active
+  → query 生成本地向量
+  → SQLite sqlite-vec 相似度检索
+  → 最多返回 top_k=3
+  → ToolMessage 返回 AgentNode
+```
+
+测试使用一个确定性小型 Embedding 实现，避免测试依赖网络或真实模型下载；生产路径和测试路径都实现 LangChain `Embeddings` 接口，并由同一个 `SqliteStore` 使用。
+
+### 22.6 四个 Memory Tool 的调用链
+
+保存：
+
+```text
+AgentNode → save_memory Tool
+  → Runtime 取得 user_id/Store/thread_id/tool_call_id
+  → 检查明确意图和敏感信息
+  → interrupt
+  → Command(resume={"approved": true})
+  → memory Skill
+  → SqliteStore.put(user namespace, tool_call_id, record)
+  → ToolMessage → AgentNode
+```
+
+`tool_call_id` 作为 `memory_id`，使同一个审批调用在异常恢复时重复写入同一个 key，而不是产生多条重复记录。
+
+检索和列表：
+
+```text
+AgentNode → search_memory/list_memories
+  → ToolRuntime 注入 user_id 和 Store
+  → Memory Skill 只查询当前用户 namespace
+  → 有界结果 → ToolMessage → AgentNode
+```
+
+删除：
+
+```text
+AgentNode → delete_memory(memory_id)
+  → interrupt 审批
+  → 当前用户 namespace 内查找
+  ├─ 找到：软删除
+  └─ 未找到：不修改任何其他用户数据
+```
+
+Resume、Replay 和 Fork 在继续执行 Graph 时也会重新传入当前 `AgentContext`。`get_state()` 和 `get_state_history()` 只读取 Checkpoint，不执行 Tool，因此不需要 Memory Runtime。

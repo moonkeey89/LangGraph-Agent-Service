@@ -1,3 +1,4 @@
+from ai_agent_learning.agent.context import AgentContext
 from ai_agent_learning.agent.checkpoint_debug import (
     show_current_state,
     show_state_history,
@@ -24,6 +25,7 @@ from ai_agent_learning.agent.time_travel import (
 
 
 __all__ = [
+    "AgentContext",
     "build_graph",
     "show_current_state",
     "show_state_history",

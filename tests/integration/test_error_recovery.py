@@ -7,15 +7,16 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.types import Command
 
-from ai_agent_learning.agent import PermanentToolError, build_graph
+from ai_agent_learning.agent import AgentContext, PermanentToolError, build_graph
 from ai_agent_learning.checkpoint import open_sqlite_checkpointer
-from ai_agent_learning.skills.memory import clear_saved_memories
+from ai_agent_learning.memory_store import open_sqlite_memory_store
 from ai_agent_learning.skills.unstable import (
     get_unstable_attempts,
     reset_unstable_tool,
     set_unstable_always_timeout,
 )
 from ai_agent_learning.tools import TOOLS
+from tests.helpers import DeterministicTestEmbeddings, TEST_EMBEDDING_DIMENSIONS
 
 
 @tool
@@ -144,15 +145,16 @@ class SaveMemoryModel:
 class ErrorRecoveryTests(unittest.TestCase):
     def setUp(self):
         reset_unstable_tool()
-        clear_saved_memories()
         self.temporary_directory = TemporaryDirectory()
         self.database_path = (
             Path(self.temporary_directory.name) / "checkpoints.sqlite"
         )
+        self.memory_database_path = (
+            Path(self.temporary_directory.name) / "memories.sqlite"
+        )
 
     def tearDown(self):
         reset_unstable_tool()
-        clear_saved_memories()
         self.temporary_directory.cleanup()
 
     @staticmethod
@@ -323,8 +325,8 @@ class ErrorRecoveryTests(unittest.TestCase):
         config = self._config("side_effect_unknown")
         side_effects: list[str] = []
 
-        def write_then_timeout(content: str) -> str:
-            side_effects.append(content)
+        def write_then_timeout(_store, **kwargs) -> str:
+            side_effects.append(kwargs["content"])
             raise TimeoutError("写入后连接中断，结果未知")
 
         with (
@@ -333,19 +335,30 @@ class ErrorRecoveryTests(unittest.TestCase):
                 side_effect=write_then_timeout,
             ),
             open_sqlite_checkpointer(self.database_path) as checkpointer,
+            open_sqlite_memory_store(
+                self.memory_database_path,
+                embeddings=DeterministicTestEmbeddings(),
+                dimensions=TEST_EMBEDDING_DIMENSIONS,
+            ) as store,
         ):
             app = build_graph(
-                SaveMemoryModel(), TOOLS, checkpointer=checkpointer
+                SaveMemoryModel(),
+                TOOLS,
+                checkpointer=checkpointer,
+                store=store,
             )
+            context = AgentContext(user_id="user_001")
             interrupted = app.invoke(
-                {"messages": [HumanMessage(content="请记住偏好")]},
+                {"messages": [HumanMessage(content="请记住，我喜欢Python")]},
                 config=config,
+                context=context,
             )
             self.assertTrue(interrupted["__interrupt__"])
 
             result = app.invoke(
                 Command(resume={"approved": True}),
                 config=config,
+                context=context,
             )
 
         self.assertEqual(side_effects, ["我喜欢Python"])

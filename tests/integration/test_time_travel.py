@@ -8,6 +8,7 @@ from unittest.mock import patch
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from ai_agent_learning.agent import (
+    AgentContext,
     ThreadIsolationError,
     UnsafeTimeTravelError,
     build_graph,
@@ -18,12 +19,11 @@ from ai_agent_learning.agent import (
     show_state_history,
 )
 from ai_agent_learning.checkpoint import open_sqlite_checkpointer
+from ai_agent_learning.memory_store import open_sqlite_memory_store
 from ai_agent_learning.skills import calculate as calculate_skill
-from ai_agent_learning.skills.memory import (
-    clear_saved_memories,
-    get_saved_memories,
-)
+from ai_agent_learning.skills.memory import list_memories as list_memories_skill
 from ai_agent_learning.tools import TOOLS
+from tests.helpers import DeterministicTestEmbeddings, TEST_EMBEDDING_DIMENSIONS
 
 
 class StateDrivenCalculateModel:
@@ -77,15 +77,23 @@ class StateDrivenSaveMemoryModel:
 
 class TimeTravelTests(unittest.TestCase):
     def setUp(self):
-        clear_saved_memories()
         self.temporary_directory = TemporaryDirectory()
         self.database_path = (
             Path(self.temporary_directory.name) / "checkpoints.sqlite"
         )
+        self.memory_database_path = (
+            Path(self.temporary_directory.name) / "memories.sqlite"
+        )
 
     def tearDown(self):
-        clear_saved_memories()
         self.temporary_directory.cleanup()
+
+    def _open_memory_store(self):
+        return open_sqlite_memory_store(
+            self.memory_database_path,
+            embeddings=DeterministicTestEmbeddings(),
+            dimensions=TEST_EMBEDDING_DIMENSIONS,
+        )
 
     @staticmethod
     def _config(thread_id: str) -> dict:
@@ -287,13 +295,20 @@ class TimeTravelTests(unittest.TestCase):
         thread_id = "time_travel_sensitive"
         config = self._config(thread_id)
 
-        with open_sqlite_checkpointer(self.database_path) as checkpointer:
+        with (
+            open_sqlite_checkpointer(self.database_path) as checkpointer,
+            self._open_memory_store() as store,
+        ):
             app = build_graph(
-                StateDrivenSaveMemoryModel(), TOOLS, checkpointer=checkpointer
+                StateDrivenSaveMemoryModel(),
+                TOOLS,
+                checkpointer=checkpointer,
+                store=store,
             )
             interrupted = app.invoke(
                 {"messages": [HumanMessage(content="请记住，我喜欢Python")]},
                 config=config,
+                context=AgentContext(user_id="user_001"),
             )
             self.assertTrue(interrupted["__interrupt__"])
             selected = next(
@@ -305,7 +320,9 @@ class TimeTravelTests(unittest.TestCase):
             with self.assertRaises(UnsafeTimeTravelError):
                 replay_checkpoint(app, selected, thread_id)
 
-            self.assertEqual(get_saved_memories(), ())
+            self.assertEqual(
+                list_memories_skill(store, user_id="user_001"), []
+            )
 
     def test_checkpoint_selection_uses_one_based_display_sequence(self):
         snapshots = [object(), object(), object()]

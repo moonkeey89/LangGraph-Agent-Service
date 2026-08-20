@@ -125,10 +125,10 @@ def validate_replay_checkpoint(snapshot, thread_id: str) -> None:
     )
 
 
-def replay_checkpoint(graph, snapshot, thread_id: str):
+def replay_checkpoint(graph, snapshot, thread_id: str, *, context=None):
     """Replay from the selected historical checkpoint's complete config."""
     validate_replay_checkpoint(snapshot, thread_id)
-    return graph.invoke(None, snapshot.config)
+    return graph.invoke(None, snapshot.config, context=context)
 
 
 def validate_fork_checkpoint(snapshot, thread_id: str) -> ToolMessage:
@@ -151,6 +151,8 @@ def fork_calculation_result(
     snapshot,
     thread_id: str,
     replacement_content: str,
+    *,
+    context=None,
 ):
     """Replace one calculate ToolMessage, create a checkpoint, then continue."""
     original_message = validate_fork_checkpoint(snapshot, thread_id)
@@ -165,5 +167,5 @@ def fork_calculation_result(
         {"messages": [replacement_message]},
         as_node="tools",
     )
-    result = graph.invoke(None, fork_config)
+    result = graph.invoke(None, fork_config, context=context)
     return fork_config, result

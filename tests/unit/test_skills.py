@@ -1,25 +1,31 @@
 import unittest
 
+from langgraph.store.memory import InMemoryStore
+
 from ai_agent_learning.skills import (
     calculate,
+    delete_memory,
+    extract_explicit_memory,
     get_weather,
+    list_memories,
     save_memory,
+    search_memory,
     search_attraction,
 )
 from ai_agent_learning.skills.memory import (
-    clear_saved_memories,
-    get_saved_memories,
+    ensure_memory_is_safe,
+    MemoryPolicyError,
 )
 from ai_agent_learning.skills.unstable import (
     get_unstable_attempts,
     reset_unstable_tool,
     run_unstable_operation,
 )
+from tests.helpers import DeterministicTestEmbeddings, TEST_EMBEDDING_DIMENSIONS
 
 
 class SkillTests(unittest.TestCase):
     def tearDown(self):
-        clear_saved_memories()
         reset_unstable_tool()
 
     def test_weather_uses_business_data(self):
@@ -59,11 +65,74 @@ class SkillTests(unittest.TestCase):
         self.assertEqual(calculate("1 / 0"), "无法计算")
         self.assertEqual(calculate("not math"), "无法计算")
 
-    def test_simulated_memory_skill_has_a_real_in_process_side_effect(self):
-        result = save_memory("我喜欢Python")
+    def test_memory_skill_supports_user_scoped_crud(self):
+        store = InMemoryStore(
+            index={
+                "dims": TEST_EMBEDDING_DIMENSIONS,
+                "embed": DeterministicTestEmbeddings(),
+                "fields": ["content"],
+            }
+        )
+        saved = save_memory(
+            store,
+            user_id="user_001",
+            memory_id="memory-1",
+            content="我主要使用Python",
+            memory_type="preference",
+            source_thread_id="thread_A",
+        )
 
-        self.assertEqual(get_saved_memories(), ("我喜欢Python",))
-        self.assertIn("已保存", result)
+        self.assertEqual(saved["source"], "user_explicit")
+        self.assertEqual(saved["status"], "active")
+        self.assertEqual(
+            search_memory(store, user_id="user_001", query="编程语言")[0][
+                "memory_id"
+            ],
+            "memory-1",
+        )
+        self.assertEqual(list_memories(store, user_id="user_002"), [])
+        self.assertFalse(
+            delete_memory(store, user_id="user_002", memory_id="memory-1")
+        )
+        self.assertTrue(
+            delete_memory(store, user_id="user_001", memory_id="memory-1")
+        )
+        self.assertEqual(list_memories(store, user_id="user_001"), [])
+
+    def test_memory_policy_requires_explicit_intent_and_rejects_secrets(self):
+        self.assertEqual(
+            extract_explicit_memory("请记住，我主要使用Python。"),
+            "我主要使用Python",
+        )
+        with self.assertRaises(MemoryPolicyError):
+            extract_explicit_memory("我主要使用Python")
+        with self.assertRaises(MemoryPolicyError):
+            extract_explicit_memory("不要记住，我主要使用Python")
+        with self.assertRaises(MemoryPolicyError):
+            ensure_memory_is_safe("我的 API Key 是 sk-abcdefghijklmnop")
+
+    def test_semantic_search_is_limited_to_three_memories(self):
+        store = InMemoryStore(
+            index={
+                "dims": TEST_EMBEDDING_DIMENSIONS,
+                "embed": DeterministicTestEmbeddings(),
+                "fields": ["content"],
+            }
+        )
+        for index in range(4):
+            save_memory(
+                store,
+                user_id="user_001",
+                memory_id=f"memory-{index}",
+                content=f"Python偏好{index}",
+                memory_type="preference",
+                source_thread_id="thread_A",
+            )
+
+        self.assertEqual(
+            len(search_memory(store, user_id="user_001", query="Python")),
+            3,
+        )
 
     def test_unstable_skill_fails_twice_then_succeeds_and_can_reset(self):
         task = "教学任务"

@@ -7,7 +7,16 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_temperature: float | None = None
+    memory_embedding_model: str = "minishlab/potion-multilingual-128M"
+    memory_embedding_dimensions: int = 256
     log_level: str = "INFO"
+
+    @field_validator("memory_embedding_dimensions")
+    @classmethod
+    def validate_embedding_dimensions(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Embedding 维度必须是正整数")
+        return value
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -5,13 +5,14 @@ from tempfile import TemporaryDirectory
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
-from ai_agent_learning.agent import build_graph
+from ai_agent_learning.agent import AgentContext, build_graph
 from ai_agent_learning.checkpoint import open_sqlite_checkpointer
 from ai_agent_learning.skills.memory import (
-    clear_saved_memories,
-    get_saved_memories,
+    list_memories as list_memories_skill,
 )
+from ai_agent_learning.memory_store import open_sqlite_memory_store
 from ai_agent_learning.tools import TOOLS
+from tests.helpers import DeterministicTestEmbeddings, TEST_EMBEDDING_DIMENSIONS
 
 
 class DirectAnswerModel:
@@ -113,15 +114,23 @@ class SaveMemoryToolCallingModel:
 
 class ReactGraphTests(unittest.TestCase):
     def setUp(self):
-        clear_saved_memories()
         self.temporary_directory = TemporaryDirectory()
         self.database_path = (
             Path(self.temporary_directory.name) / "checkpoints.sqlite"
         )
+        self.memory_database_path = (
+            Path(self.temporary_directory.name) / "memories.sqlite"
+        )
 
     def tearDown(self):
-        clear_saved_memories()
         self.temporary_directory.cleanup()
+
+    def _open_memory_store(self):
+        return open_sqlite_memory_store(
+            self.memory_database_path,
+            embeddings=DeterministicTestEmbeddings(),
+            dimensions=TEST_EMBEDDING_DIMENSIONS,
+        )
 
     def test_graph_preserves_react_loop_with_recovery_nodes(self):
         app = build_graph(DirectAnswerModel(), TOOLS)
@@ -284,41 +293,62 @@ class ReactGraphTests(unittest.TestCase):
     def test_sensitive_tool_pauses_and_executes_once_after_approval(self):
         config = {"configurable": {"thread_id": "thread_hitl_001"}}
 
-        with open_sqlite_checkpointer(self.database_path) as checkpointer:
+        with (
+            open_sqlite_checkpointer(self.database_path) as checkpointer,
+            self._open_memory_store() as store,
+        ):
             app = build_graph(
-                SaveMemoryToolCallingModel(), TOOLS, checkpointer=checkpointer
+                SaveMemoryToolCallingModel(),
+                TOOLS,
+                checkpointer=checkpointer,
+                store=store,
             )
+            context = AgentContext(user_id="user_001")
             interrupted = app.invoke(
                 {"messages": [HumanMessage(content="请记住，我喜欢Python")]},
                 config=config,
+                context=context,
             )
 
-            self.assertEqual(get_saved_memories(), ())
+            self.assertEqual(
+                list_memories_skill(store, user_id="user_001"), []
+            )
             interrupt_info = interrupted["__interrupt__"][0]
             self.assertEqual(interrupt_info.value["action"], "save_user_memory")
             self.assertEqual(interrupt_info.value["tool_name"], "save_memory")
             self.assertEqual(
-                interrupt_info.value["arguments"], {"content": "我喜欢Python"}
+                interrupt_info.value["arguments"],
+                {"content": "我喜欢Python", "memory_type": "fact"},
             )
 
             result = app.invoke(
                 Command(resume={"approved": True}),
                 config=config,
+                context=context,
             )
 
-            self.assertEqual(get_saved_memories(), ("我喜欢Python",))
+            memories = list_memories_skill(store, user_id="user_001")
+            self.assertEqual([memory["content"] for memory in memories], ["我喜欢Python"])
             self.assertEqual(result["messages"][-1].content, "记忆保存成功。")
 
     def test_sensitive_tool_rejection_has_no_side_effect(self):
         config = {"configurable": {"thread_id": "thread_hitl_002"}}
 
-        with open_sqlite_checkpointer(self.database_path) as checkpointer:
+        with (
+            open_sqlite_checkpointer(self.database_path) as checkpointer,
+            self._open_memory_store() as store,
+        ):
             app = build_graph(
-                SaveMemoryToolCallingModel(), TOOLS, checkpointer=checkpointer
+                SaveMemoryToolCallingModel(),
+                TOOLS,
+                checkpointer=checkpointer,
+                store=store,
             )
+            context = AgentContext(user_id="user_001")
             interrupted = app.invoke(
                 {"messages": [HumanMessage(content="请记住，我喜欢Python")]},
                 config=config,
+                context=context,
             )
             self.assertTrue(interrupted["__interrupt__"])
 
@@ -327,9 +357,12 @@ class ReactGraphTests(unittest.TestCase):
                     resume={"approved": False, "reason": "用户拒绝"}
                 ),
                 config=config,
+                context=context,
             )
 
-            self.assertEqual(get_saved_memories(), ())
+            self.assertEqual(
+                list_memories_skill(store, user_id="user_001"), []
+            )
             self.assertEqual(
                 result["messages"][-1].content, "记忆保存操作已取消。"
             )
@@ -342,23 +375,35 @@ class ReactGraphTests(unittest.TestCase):
             "configurable": {"thread_id": "thread_hitl_004"}
         }
 
-        with open_sqlite_checkpointer(self.database_path) as first_checkpointer:
+        with (
+            open_sqlite_checkpointer(self.database_path) as first_checkpointer,
+            self._open_memory_store() as first_store,
+        ):
             first_app = build_graph(
                 SaveMemoryToolCallingModel(),
                 TOOLS,
                 checkpointer=first_checkpointer,
+                store=first_store,
             )
+            context = AgentContext(user_id="user_001")
             first_app.invoke(
                 {"messages": [HumanMessage(content="请记住，我喜欢Python")]},
                 config=interrupted_config,
+                context=context,
             )
-            self.assertEqual(get_saved_memories(), ())
+            self.assertEqual(
+                list_memories_skill(first_store, user_id="user_001"), []
+            )
 
-        with open_sqlite_checkpointer(self.database_path) as second_checkpointer:
+        with (
+            open_sqlite_checkpointer(self.database_path) as second_checkpointer,
+            self._open_memory_store() as second_store,
+        ):
             second_app = build_graph(
                 SaveMemoryToolCallingModel(),
                 TOOLS,
                 checkpointer=second_checkpointer,
+                store=second_store,
             )
             pending_state = second_app.get_state(interrupted_config)
             isolated_state = second_app.get_state(isolated_config)
@@ -371,9 +416,11 @@ class ReactGraphTests(unittest.TestCase):
             result = second_app.invoke(
                 Command(resume={"approved": True}),
                 config=interrupted_config,
+                context=context,
             )
 
-            self.assertEqual(get_saved_memories(), ("我喜欢Python",))
+            memories = list_memories_skill(second_store, user_id="user_001")
+            self.assertEqual([memory["content"] for memory in memories], ["我喜欢Python"])
             self.assertEqual(result["messages"][-1].content, "记忆保存成功。")
 
 

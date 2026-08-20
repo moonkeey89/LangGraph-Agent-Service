@@ -3,10 +3,12 @@ import logging
 
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 from langgraph.types import Command, Interrupt
 from pydantic import ValidationError
 
 from ai_agent_learning.agent import (
+    AgentContext,
     build_graph,
     checkpoint_id,
     describe_replay_nodes,
@@ -23,19 +25,35 @@ from ai_agent_learning.checkpoint import CHECKPOINT_DB_PATH, open_sqlite_checkpo
 from ai_agent_learning.config import Settings
 from ai_agent_learning.llm import create_llm
 from ai_agent_learning.logging_config import configure_logging
+from ai_agent_learning.embeddings import LocalModel2VecEmbeddings
+from ai_agent_learning.memory_store import MEMORY_DB_PATH, open_sqlite_memory_store
 from ai_agent_learning.tools import TOOLS
 
 
 logger = logging.getLogger(__name__)
 DEFAULT_THREAD_ID = "default"
+DEFAULT_USER_ID = "default_user"
 
 
 def create_agent_app(
     settings: Settings,
     checkpointer: BaseCheckpointSaver,
+    store: BaseStore | None = None,
 ):
     llm = create_llm(settings)
-    return build_graph(llm, TOOLS, checkpointer=checkpointer)
+    return build_graph(llm, TOOLS, checkpointer=checkpointer, store=store)
+
+
+def prompt_user_id() -> str | None:
+    try:
+        user_id = input(
+            f"请输入用户 ID（直接回车使用 {DEFAULT_USER_ID}）："
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+
+    return user_id or DEFAULT_USER_ID
 
 
 def prompt_thread_id() -> str | None:
@@ -111,6 +129,7 @@ def resume_interrupted_graph(
     app,
     config: dict,
     interrupts: tuple[Interrupt, ...],
+    context: AgentContext | None = None,
 ):
     current_interrupts = interrupts
 
@@ -120,7 +139,11 @@ def resume_interrupted_graph(
             print("审批状态已保留，可使用相同 thread_id 重新启动后继续。")
             return None
 
-        result = app.invoke(Command(resume=resume_value), config=config)
+        result = app.invoke(
+            Command(resume=resume_value),
+            config=config,
+            context=context,
+        )
         current_interrupts = _extract_interrupts(result)
 
     return result
@@ -162,7 +185,11 @@ def _print_time_travel_result(result) -> None:
         print(result["messages"][-1].content)
 
 
-def run_replay_command(app, thread_id: str) -> None:
+def run_replay_command(
+    app,
+    thread_id: str,
+    context: AgentContext | None = None,
+) -> None:
     snapshots = show_state_history(app, thread_id)
     selected = prompt_checkpoint_selection(snapshots, "Replay")
     if selected is None:
@@ -174,7 +201,7 @@ def run_replay_command(app, thread_id: str) -> None:
         print(f"将使用完整 config Replay：checkpoint_id={checkpoint_id(selected)}")
         print(f"将从 next 开始重新执行：{nodes}")
         print("该 Checkpoint 之前的节点不会重新执行。")
-        result = replay_checkpoint(app, selected, thread_id)
+        result = replay_checkpoint(app, selected, thread_id, context=context)
     except TimeTravelError as exc:
         print(f"Replay 已拒绝：{exc}")
         return
@@ -182,7 +209,11 @@ def run_replay_command(app, thread_id: str) -> None:
     _print_time_travel_result(result)
 
 
-def run_fork_command(app, thread_id: str) -> None:
+def run_fork_command(
+    app,
+    thread_id: str,
+    context: AgentContext | None = None,
+) -> None:
     snapshots = show_state_history(app, thread_id)
     selected = prompt_checkpoint_selection(snapshots, "Fork")
     if selected is None:
@@ -209,6 +240,7 @@ def run_fork_command(app, thread_id: str) -> None:
             selected,
             thread_id,
             replacement,
+            context=context,
         )
     except TimeTravelError as exc:
         print(f"Fork 已拒绝：{exc}")
@@ -221,14 +253,21 @@ def run_fork_command(app, thread_id: str) -> None:
     _print_time_travel_result(result)
 
 
-def run_cli(app, thread_id: str) -> None:
+def run_cli(
+    app,
+    thread_id: str,
+    user_id: str = DEFAULT_USER_ID,
+) -> None:
     config = {"configurable": {"thread_id": thread_id}}
+    context = AgentContext(user_id=user_id)
 
     try:
         pending = _pending_interrupts(app, config)
         if pending:
             print("检测到该会话存在尚未处理的审批请求。")
-            resumed_result = resume_interrupted_graph(app, config, pending)
+            resumed_result = resume_interrupted_graph(
+                app, config, pending, context=context
+            )
             if resumed_result is None:
                 return
             print(resumed_result["messages"][-1].content)
@@ -257,9 +296,9 @@ def run_cli(app, thread_id: str) -> None:
                 elif user_input.lower() == "/history":
                     show_state_history(app, thread_id)
                 elif user_input.lower() == "/replay":
-                    run_replay_command(app, thread_id)
+                    run_replay_command(app, thread_id, context=context)
                 else:
-                    run_fork_command(app, thread_id)
+                    run_fork_command(app, thread_id, context=context)
             except Exception:
                 logger.exception("Checkpoint or Time Travel command failed")
                 print("Checkpoint 操作失败，请检查日志和当前会话状态。")
@@ -269,10 +308,13 @@ def run_cli(app, thread_id: str) -> None:
             result = app.invoke(
                 {"messages": [HumanMessage(content=user_input)]},
                 config=config,
+                context=context,
             )
             interrupts = _extract_interrupts(result)
             if interrupts:
-                result = resume_interrupted_graph(app, config, interrupts)
+                result = resume_interrupted_graph(
+                    app, config, interrupts, context=context
+                )
                 if result is None:
                     return
         except Exception:
@@ -294,20 +336,36 @@ def main() -> int:
     configure_logging(settings.log_level)
 
     try:
-        with open_sqlite_checkpointer() as checkpointer:
-            app = create_agent_app(settings, checkpointer)
+        embeddings = LocalModel2VecEmbeddings(
+            settings.memory_embedding_model
+        )
+        with (
+            open_sqlite_checkpointer() as checkpointer,
+            open_sqlite_memory_store(
+                embeddings=embeddings,
+                dimensions=settings.memory_embedding_dimensions,
+            ) as store,
+        ):
+            app = create_agent_app(settings, checkpointer, store)
+
+            user_id = prompt_user_id()
+            if user_id is None:
+                return 0
 
             thread_id = prompt_thread_id()
             if thread_id is None:
                 return 0
 
             logger.info(
-                "AI Agent started with model %s, thread %s, checkpoint database %s",
+                "AI Agent started with model %s, user %s, thread %s, "
+                "checkpoint database %s, memory database %s",
                 settings.deepseek_model,
+                user_id,
                 thread_id,
                 CHECKPOINT_DB_PATH,
+                MEMORY_DB_PATH,
             )
-            run_cli(app, thread_id)
+            run_cli(app, thread_id, user_id)
     except Exception:
         logger.exception("Agent startup failed")
         return 1

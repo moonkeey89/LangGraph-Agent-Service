@@ -6,7 +6,9 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.store.base import BaseStore
 
+from ai_agent_learning.agent.context import AgentContext
 from ai_agent_learning.agent.error_recovery import (
     build_failure_response,
     clear_tool_error,
@@ -26,6 +28,7 @@ def build_graph(
     llm: BaseChatModel,
     tools: Sequence[BaseTool],
     checkpointer: BaseCheckpointSaver | None = None,
+    store: BaseStore | None = None,
 ):
     agent = AgentNode(llm, tools)
     tool_node = ToolNode(
@@ -33,7 +36,7 @@ def build_graph(
         handle_tool_errors=False,
         wrap_tool_call=tool_error_boundary,
     )
-    graph = StateGraph(AgentState)
+    graph = StateGraph(AgentState, context_schema=AgentContext)
 
     graph.add_node("agent", agent.run)
     graph.add_node("tools", tool_node)
@@ -62,4 +65,4 @@ def build_graph(
     graph.add_edge("failure", END)
 
     logger.info("Compiled LangGraph ReAct workflow")
-    return graph.compile(checkpointer=checkpointer)
+    return graph.compile(checkpointer=checkpointer, store=store)

@@ -6,8 +6,10 @@ from langgraph.types import Command, Interrupt
 
 from ai_agent_learning.cli import (
     DEFAULT_THREAD_ID,
+    DEFAULT_USER_ID,
     create_agent_app,
     prompt_thread_id,
+    prompt_user_id,
     run_fork_command,
     run_cli,
     run_replay_command,
@@ -33,6 +35,7 @@ class CliTests(unittest.TestCase):
         self.assertIs(
             build_graph.call_args.kwargs["checkpointer"], checkpointer
         )
+        self.assertIsNone(build_graph.call_args.kwargs["store"])
 
     @patch("builtins.print")
     @patch("builtins.input", side_effect=["你好", "exit"])
@@ -112,7 +115,9 @@ class CliTests(unittest.TestCase):
         run_replay_command(app, "user_001")
 
         validate_replay_checkpoint.assert_called_once_with(snapshot, "user_001")
-        replay_checkpoint.assert_called_once_with(app, snapshot, "user_001")
+        replay_checkpoint.assert_called_once_with(
+            app, snapshot, "user_001", context=None
+        )
 
     @patch("ai_agent_learning.cli.fork_calculation_result")
     @patch("ai_agent_learning.cli.validate_fork_checkpoint")
@@ -158,6 +163,7 @@ class CliTests(unittest.TestCase):
             snapshot,
             "user_001",
             "43",
+            context=None,
         )
 
     @patch("builtins.print")
@@ -259,6 +265,15 @@ class CliTests(unittest.TestCase):
     def test_session_id_is_read_once_at_startup(self, _input):
         self.assertEqual(prompt_thread_id(), "user_002")
 
+    @patch("builtins.input", return_value="")
+    def test_empty_user_id_uses_stable_default(self, _input):
+        self.assertEqual(prompt_user_id(), DEFAULT_USER_ID)
+
+    @patch("builtins.input", return_value=" user_001 ")
+    def test_user_id_is_read_at_startup(self, _input):
+        self.assertEqual(prompt_user_id(), "user_001")
+
 
 if __name__ == "__main__":
     unittest.main()
+    prompt_user_id,

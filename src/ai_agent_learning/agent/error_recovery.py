@@ -11,7 +11,7 @@ from ai_agent_learning.agent.state import AgentState, ErrorType
 
 
 DEFAULT_MAX_RETRIES = 3
-SIDE_EFFECT_TOOL_NAMES = frozenset({"save_memory"})
+SIDE_EFFECT_TOOL_NAMES = frozenset({"save_memory", "delete_memory"})
 TRANSIENT_EXCEPTION_NAMES = frozenset(
     {"RateLimitError", "APIConnectionError", "APITimeoutError"}
 )
