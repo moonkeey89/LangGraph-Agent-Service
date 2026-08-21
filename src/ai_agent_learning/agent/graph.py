@@ -25,6 +25,7 @@ from ai_agent_learning.agent.memory_manager import (
     MemoryExecutorNode,
     MemoryManagerNode,
 )
+from ai_agent_learning.agent.memory_recall import MemoryRecallNode
 from ai_agent_learning.agent.state import AgentState
 
 
@@ -53,6 +54,7 @@ def build_graph(
     agent = AgentNode(llm, tools)
     memory_manager = MemoryManagerNode(memory_manager_llm or llm)
     memory_executor = MemoryExecutorNode(memory_confidence_threshold)
+    memory_recall = MemoryRecallNode()
     tool_node = ToolNode(
         tools,
         handle_tool_errors=False,
@@ -60,6 +62,7 @@ def build_graph(
     )
     graph = StateGraph(AgentState, context_schema=AgentContext)
 
+    graph.add_node("memory_recall", memory_recall.run)
     graph.add_node("agent", agent.run)
     graph.add_node("tools", tool_node)
     graph.add_node("tool_success", clear_tool_error)
@@ -67,7 +70,8 @@ def build_graph(
     graph.add_node("failure", build_failure_response)
     graph.add_node("memory_manager", memory_manager.run)
     graph.add_node("memory_executor", memory_executor.run)
-    graph.set_entry_point("agent")
+    graph.set_entry_point("memory_recall")
+    graph.add_edge("memory_recall", "agent")
     graph.add_conditional_edges(
         "agent",
         route_after_agent,

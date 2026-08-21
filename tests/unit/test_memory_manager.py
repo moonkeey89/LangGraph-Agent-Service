@@ -29,6 +29,7 @@ class MemoryManagerUnitTests(unittest.TestCase):
         candidate_messages = [
             "我叫小明",
             "我喜欢Python",
+            "我爱吃青菜，最喜欢数学",
             "我平时使用PyCharm开发",
             "我现在改用VS Code开发了",
             "我的目标是学习LangGraph",
@@ -39,6 +40,7 @@ class MemoryManagerUnitTests(unittest.TestCase):
             "北京天气怎么样？",
             "帮我计算100×20",
             "我主要使用什么语言？",
+            "我喜欢什么",
             "请记住，我喜欢Python",
         ]
 

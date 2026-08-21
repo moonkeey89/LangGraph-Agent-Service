@@ -33,6 +33,8 @@ MemoryManagerStatus = Literal[
     "failed",
 ]
 
+MemoryRecallStatus = Literal["skipped", "completed", "failed"]
+
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -46,3 +48,6 @@ class AgentState(TypedDict):
     memory_candidate_ids: NotRequired[list[str]]
     memory_manager_status: NotRequired[MemoryManagerStatus]
     memory_manager_error: NotRequired[str | None]
+    recalled_memories: NotRequired[list[dict[str, object]]]
+    memory_recall_status: NotRequired[MemoryRecallStatus]
+    memory_recall_error: NotRequired[str | None]

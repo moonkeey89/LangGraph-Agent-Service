@@ -4,7 +4,12 @@ import re
 from hashlib import sha256
 from typing import Any, Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.runtime import Runtime
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -31,14 +36,18 @@ DEFAULT_MEMORY_CONFIDENCE_THRESHOLD = 0.75
 MEMORY_SIDE_EFFECT_TOOLS = frozenset({"save_memory", "delete_memory"})
 
 _EXPLICIT_SAVE_PATTERN = re.compile(
-    r"(?:请帮我记住|请记住|帮我记住|记住这件事)", re.IGNORECASE
+    r"(?:请帮我记住|请记住|帮我记住|记住这件事|记住)", re.IGNORECASE
 )
 _CANDIDATE_PATTERN = re.compile(
     r"(?:"
-    r"我叫|我的名字(?:是|叫)|我喜欢|我不喜欢|"
+    r"我叫|我的名字(?:是|叫)|我喜欢|我不喜欢|我爱|最喜欢|"
     r"我(?:平时|主要|现在)?使用|我正在|我现在改用|"
     r"以后请|我的目标|忘记|忘掉|请忘记"
     r")",
+    re.IGNORECASE,
+)
+_QUESTION_PATTERN = re.compile(
+    r"(?:什么|谁|哪些|哪一个|多少|怎么|如何|吗|呢)[？?]?$",
     re.IGNORECASE,
 )
 _LOW_VALUE_PATTERN = re.compile(
@@ -101,16 +110,37 @@ def _latest_human_message(state: AgentState) -> tuple[int, str] | None:
     return None
 
 
-def _memory_tool_was_called(state: AgentState, human_index: int) -> bool:
-    for message in state.get("messages", [])[human_index + 1 :]:
-        if not isinstance(message, AIMessage):
-            continue
-        if any(
-            str(call.get("name", "")) in MEMORY_SIDE_EFFECT_TOOLS
-            for call in message.tool_calls
-        ):
-            return True
-    return False
+def _memory_operation_was_finally_handled(
+    state: AgentState,
+    human_index: int,
+) -> bool:
+    """Skip only final memory outcomes, not a non-explicit Tool refusal."""
+    turn_messages = state.get("messages", [])[human_index + 1 :]
+    memory_call_ids = {
+        str(call.get("id", ""))
+        for message in turn_messages
+        if isinstance(message, AIMessage)
+        for call in message.tool_calls
+        if str(call.get("name", "")) in MEMORY_SIDE_EFFECT_TOOLS
+    }
+    if not memory_call_ids:
+        return False
+
+    tool_results = [
+        message
+        for message in turn_messages
+        if isinstance(message, ToolMessage)
+        and message.tool_call_id in memory_call_ids
+    ]
+    if not tool_results:
+        # An unresolved tool/interrupt must never be bypassed by automatic memory.
+        return True
+
+    non_explicit_refusal = "未检测到“请记住”等明确保存意图"
+    return any(
+        non_explicit_refusal not in str(message.content)
+        for message in tool_results
+    )
 
 
 def is_memory_candidate(user_message: str) -> bool:
@@ -122,7 +152,10 @@ def is_memory_candidate(user_message: str) -> bool:
     if _EXPLICIT_SAVE_PATTERN.search(text):
         # Explicit saves remain owned by save_memory + interrupt approval.
         return False
-    if ("?" in text or "？" in text) and not re.search(r"忘记|忘掉", text):
+    if (
+        ("?" in text or "？" in text or _QUESTION_PATTERN.search(text))
+        and not re.search(r"忘记|忘掉", text)
+    ):
         return False
     if _CANDIDATE_PATTERN.search(text):
         return True
@@ -188,7 +221,7 @@ class MemoryManagerNode:
             )
 
         human_index, user_message = latest
-        if _memory_tool_was_called(state, human_index):
+        if _memory_operation_was_finally_handled(state, human_index):
             return _state_update(
                 MemoryDecision.none("本轮已由显式记忆工具处理"),
                 status="skipped",

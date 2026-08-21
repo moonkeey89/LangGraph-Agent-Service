@@ -57,7 +57,7 @@ def save_memory(
     runtime: ToolRuntime[AgentContext, AgentState],
     memory_type: MemoryType = "fact",
 ) -> dict[str, Any] | str:
-    """仅保存用户用“请记住”等措辞明确要求长期记住的简洁事实。"""
+    """仅当用户明确说“请记住”等措辞时调用；普通偏好陈述不要调用。"""
     if runtime.store is None:
         return "长期记忆 Store 未配置，无法保存。"
 

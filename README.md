@@ -9,7 +9,7 @@
                          ↓
 用户输入 + thread_id + AgentContext(user_id)
                          ↓
-LangGraph → AgentNode ↔ ToolNode → LangChain Tool → Skill
+LangGraph → Memory Recall → AgentNode ↔ ToolNode → LangChain Tool → Skill
     │              │
     │              └─ 最终回答 → Memory Manager → Memory Executor → END
     │                                      │
@@ -26,6 +26,7 @@ LangGraph → AgentNode ↔ ToolNode → LangChain Tool → Skill
 - `SqliteStore`：按 `user_id` namespace 持久化显式批准或经 Memory Policy 通过的长期记忆。
 - `Memory Manager`：最终回答后只分析最新用户消息和当前用户 Top-K 记忆，输出结构化 ADD/UPDATE/DELETE/NONE。
 - `Memory Executor`：用确定性代码校验置信度、敏感信息、候选 ID 和用户归属，通过后才调用 Memory Skill。
+- `Memory Recall`：个人信息问题回答前，按当前 `user_id` 召回 Top-K 记忆并作为受控背景数据交给 AgentNode。
 - `Human-in-the-loop`：`save_memory` 和 `delete_memory` 在写入前通过 `interrupt()` 请求人工审批。
 - `Error Recovery`：ToolNode 调用边界对错误分类；只有临时错误有限重试，超限后进入人工复核。
 - `legacy`：早期手写 Agent 代码，不进入当前运行链。
@@ -113,7 +114,9 @@ DELETE  在当前用户候选范围内软删除一条已有记忆
 NONE    不修改长期记忆
 ```
 
-显式“请记住”仍由原有 `save_memory + interrupt` 流程处理；Memory Manager 检测到本轮已经调用 `save_memory` 或 `delete_memory` 后会跳过，避免批准、拒绝或恢复执行之后产生重复写入。
+显式“请记住”仍由原有 `save_memory + interrupt` 流程处理；Memory Manager 检测到本轮记忆工具已经保存成功、被用户拒绝或被安全策略最终否决后会跳过，避免批准、拒绝或恢复执行之后产生重复写入。
+
+如果显式 `save_memory` 只是因为用户没有说“请记住”而拒绝，本轮不会被视为已经完成记忆处理，后置 Memory Manager 仍可分析“我喜欢”“我爱”“最喜欢”等普通陈述。新 thread 中出现“我是谁”“我喜欢什么”等个人问题时，Memory Recall 会在 Agent 回答前查询同一 `user_id` 的 Top-K 长期记忆；不同 `user_id` 的 namespace 仍然严格隔离。
 
 教学工具 `unstable_tool` 不访问真实网络：同一任务前两次固定抛出
 `TimeoutError`，第三次成功。临时错误的失败次数写入 AgentState；达到 3 次

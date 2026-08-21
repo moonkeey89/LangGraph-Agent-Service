@@ -142,6 +142,7 @@ class ReactGraphTests(unittest.TestCase):
             nodes,
             {
                 "__start__",
+                "memory_recall",
                 "agent",
                 "tools",
                 "tool_success",
@@ -154,7 +155,8 @@ class ReactGraphTests(unittest.TestCase):
         )
         self.assertTrue(
             {
-                ("__start__", "agent"),
+                ("__start__", "memory_recall"),
+                ("memory_recall", "agent"),
                 ("agent", "tools"),
                 ("agent", "memory_manager"),
                 ("tools", "tool_success"),

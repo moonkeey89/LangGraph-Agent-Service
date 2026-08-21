@@ -3,7 +3,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.runtime import Runtime
 from langgraph.types import Command
 
@@ -50,6 +55,48 @@ class ExplicitSaveModel:
                 }
             ],
         )
+
+
+class OvereagerSaveThenRecallModel:
+    """Reproduces a real LLM calling save_memory without explicit intent."""
+
+    def bind_tools(self, _tools):
+        return self
+
+    def invoke(self, messages):
+        last_message = messages[-1]
+        if isinstance(last_message, ToolMessage):
+            return AIMessage(content="已收到记忆工具结果")
+
+        human_message = next(
+            message
+            for message in reversed(messages)
+            if isinstance(message, HumanMessage)
+        )
+        if "我爱吃青菜" in str(human_message.content):
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "save_memory",
+                        "args": {
+                            "content": "用户爱吃青菜并且最喜欢数学",
+                            "memory_type": "preference",
+                        },
+                        "id": "overeager-save-1",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+
+        recalled_text = "\n".join(
+            str(message.content)
+            for message in messages
+            if isinstance(message, SystemMessage)
+        )
+        if "青菜" in recalled_text:
+            return AIMessage(content="你喜欢吃青菜，而且最喜欢数学。")
+        return AIMessage(content="我不知道你喜欢什么。")
 
 
 class ScriptedDecisionModel:
@@ -417,6 +464,77 @@ class MemoryManagerIntegrationTests(unittest.TestCase):
                 "invalid structured output", result["memory_manager_error"]
             )
             self.assertEqual(list_memories(store, user_id="user_001"), [])
+
+    def test_non_explicit_tool_refusal_falls_through_and_recalls_cross_thread(self):
+        manager_model = ScriptedDecisionModel(
+            decision(
+                "ADD",
+                content="用户爱吃青菜并且最喜欢数学",
+                memory_type="preference",
+            )
+        )
+        context = self._context("user_001")
+
+        with (
+            open_sqlite_checkpointer(self.checkpoint_path) as checkpointer,
+            self._store() as store,
+        ):
+            first_app = build_graph(
+                OvereagerSaveThenRecallModel(),
+                TOOLS,
+                checkpointer=checkpointer,
+                store=store,
+                memory_manager_llm=manager_model,
+            )
+            first_result = self._invoke(
+                first_app,
+                "我爱吃青菜，最喜欢数学",
+                "thread_001",
+            )
+
+            tool_messages = [
+                message
+                for message in first_result["messages"]
+                if isinstance(message, ToolMessage)
+            ]
+            self.assertTrue(
+                any("未检测到" in str(message.content) for message in tool_messages)
+            )
+            self.assertEqual(first_result["memory_manager_status"], "applied")
+            self.assertEqual(len(list_memories(store, user_id="user_001")), 1)
+
+        # Reopen both SQLite databases and use a new thread for the same user.
+        with (
+            open_sqlite_checkpointer(self.checkpoint_path) as checkpointer,
+            self._store() as store,
+        ):
+            restarted_app = build_graph(
+                OvereagerSaveThenRecallModel(),
+                TOOLS,
+                checkpointer=checkpointer,
+                store=store,
+                memory_manager_llm=manager_model,
+            )
+            recalled = self._invoke(
+                restarted_app,
+                "我喜欢什么",
+                "thread_002",
+            )
+            isolated = self._invoke(
+                restarted_app,
+                "我喜欢什么",
+                "thread_other_user",
+                user_id="user_002",
+            )
+
+            self.assertEqual(
+                recalled["messages"][-1].content,
+                "你喜欢吃青菜，而且最喜欢数学。",
+            )
+            self.assertEqual(recalled["memory_recall_status"], "completed")
+            self.assertEqual(len(recalled["recalled_memories"]), 1)
+            self.assertEqual(isolated["messages"][-1].content, "我不知道你喜欢什么。")
+            self.assertEqual(isolated["recalled_memories"], [])
 
 
 if __name__ == "__main__":

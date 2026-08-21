@@ -1,6 +1,6 @@
 import unittest
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from ai_agent_learning.agent.node import AgentNode
 from ai_agent_learning.tools import TOOLS
@@ -29,8 +29,31 @@ class AgentNodeTests(unittest.TestCase):
         result = node.run({"messages": messages})
 
         self.assertIs(llm.bound_tools, TOOLS)
-        self.assertIs(llm.received_messages, messages)
+        self.assertIsInstance(llm.received_messages[0], SystemMessage)
+        self.assertIs(llm.received_messages[1], messages[0])
+        self.assertIn("ToolMessage", llm.received_messages[0].content)
         self.assertEqual(result["messages"][0].content, "测试回答")
+
+    def test_node_injects_recalled_memories_without_user_id(self):
+        llm = FakeChatModel()
+        node = AgentNode(llm, TOOLS)
+
+        node.run(
+            {
+                "messages": [HumanMessage(content="我喜欢什么")],
+                "recalled_memories": [
+                    {
+                        "memory_id": "memory-1",
+                        "content": "用户喜欢吃青菜",
+                        "memory_type": "preference",
+                    }
+                ],
+            }
+        )
+
+        system_message = llm.received_messages[0]
+        self.assertIn("用户喜欢吃青菜", system_message.content)
+        self.assertNotIn("user_001", system_message.content)
 
 
 if __name__ == "__main__":

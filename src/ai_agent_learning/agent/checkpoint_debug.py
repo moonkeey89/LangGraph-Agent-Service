@@ -87,6 +87,17 @@ def show_state_history(graph, thread_id: str):
             else "<无>"
         )
         print(f"  memory_operation: {operation}")
+        print(
+            "  memory_recall_status: "
+            f"{values.get('memory_recall_status', '<无>')}"
+        )
+        recalled_memories = values.get("recalled_memories", [])
+        recalled_count = (
+            len(recalled_memories)
+            if isinstance(recalled_memories, (list, tuple))
+            else 0
+        )
+        print(f"  recalled_memory_count: {recalled_count}")
         print(f"  消息数量: {len(messages)}")
         if last_message is None:
             print("  最后一条消息: <无>")

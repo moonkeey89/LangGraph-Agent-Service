@@ -1779,4 +1779,34 @@ reason             决策理由
 
 代码先做轻量候选判断。天气、计算、寒暄、普通问句直接 `NONE`；“我叫”“我喜欢”“我使用”“我正在”“我现在改用”“以后请”“我的目标”“忘记”等表达才调用结构化决策 LLM。
 
-“请记住”仍保留原有 Tool + interrupt 审批链。Memory Manager 会检查从最新 HumanMessage 开始的本轮消息；只要已经出现 `save_memory` 或 `delete_memory` Tool Call，就直接 `NONE`，不论用户最后批准还是拒绝，都不会在最终回答后再写一份。
+“请记住”仍保留原有 Tool + interrupt 审批链。Memory Manager 会检查从最新 HumanMessage 开始的本轮 ToolMessage 结果；保存成功、用户拒绝或安全策略拒绝会直接 `NONE`，不会在最终回答后再写一份。
+
+实际模型可能在用户只说“我喜欢……”时也误调用显式 `save_memory`。因此最终实现不能只判断“是否调用过工具”，而要判断 ToolMessage 的结果：
+
+```text
+保存成功 / 用户拒绝 / 敏感信息拒绝
+  → 已形成最终处理结果，Memory Manager 跳过
+
+仅因“未检测到明确保存意图”而拒绝
+  → 显式Tool没有负责这条普通陈述
+  → 继续进入自动Memory Manager
+```
+
+### 23.5 回答前的 Memory Recall
+
+Memory Manager 解决写入和维护，但它位于最终回答之后，无法帮助当前回答。不同 thread 又不会共享 Checkpoint messages，因此增加独立的回答前召回节点：
+
+```text
+新用户消息
+  → Memory Recall
+      → 识别“我是谁”“我喜欢什么”等个人信息问题
+      → Runtime取得可信user_id
+      → 当前用户namespace语义检索Top-K
+      → 只把候选正文作为不可信背景数据注入AgentNode
+  → AgentNode回答
+  → ReAct循环
+  → Memory Manager / Executor
+  → END
+```
+
+Recall 不把 `user_id` 或全部记忆交给模型。天气、计算、寒暄等问题直接跳过；Store异常安全降级为空召回，不影响主Agent回答。
