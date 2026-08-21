@@ -1632,7 +1632,7 @@ memory_id
 content
 user_id
 memory_type
-source=user_explicit
+source=user_explicit/memory_manager
 source_thread_id
 created_at
 updated_at
@@ -1643,7 +1643,7 @@ status=active/deleted
 
 ### 22.4 为什么保存不能只相信 LLM
 
-第一版不做自动 Memory Manager。即使模型误调用 `save_memory`，Tool 也会反向查找当前 State 中最近的 HumanMessage，并确定性检查是否存在“请记住”“帮我记住”“记住这件事”等明确表达。
+显式保存路径不依赖自动 Memory Manager。即使模型误调用 `save_memory`，Tool 也会反向查找当前 State 中最近的 HumanMessage，并确定性检查是否存在“请记住”“帮我记住”“记住这件事”等明确表达。
 
 ```text
 普通问题
@@ -1725,3 +1725,58 @@ AgentNode → delete_memory(memory_id)
 ```
 
 Resume、Replay 和 Fork 在继续执行 Graph 时也会重新传入当前 `AgentContext`。`get_state()` 和 `get_state_history()` 只读取 Checkpoint，不执行 Tool，因此不需要 Memory Runtime。
+
+## 23. Memory Manager 最小闭环
+
+### 23.1 为什么拆成决策和执行两个节点
+
+Memory Manager 位于正常 ReAct 最终回答之后：
+
+```text
+AgentNode 最终回答
+  → Memory Manager
+      → 只读取最新 HumanMessage
+      → 只查询当前 user_id 的 Top-K 记忆
+      → 结构化输出 ADD/UPDATE/DELETE/NONE
+  → Memory Executor
+      → 代码校验
+      → 通过后调用 Memory Skill
+  → END
+```
+
+LLM 擅长理解“这是新事实还是对旧事实的修正”，但它不应直接拥有写数据库的权限。因此 Memory Manager 只产生不包含 `user_id` 的 `MemoryDecision`；Memory Executor 才能从可信 `Runtime[AgentContext]` 获取用户身份和 Store。
+
+### 23.2 MemoryDecision
+
+```text
+operation          ADD / UPDATE / DELETE / NONE
+memory_type        preference / profile / fact / instruction / other
+content            简洁、独立的记忆正文
+target_memory_id   UPDATE/DELETE 的候选目标
+confidence         0 到 1
+reason             决策理由
+```
+
+模型输入只有最新用户消息、当前用户候选记忆以及决策规则。不会提供 AI 最终回答，也不会提供真实 `user_id`。这样模型不能把自己的回答当成用户事实，也不能构造其他用户的 namespace。
+
+### 23.3 Memory Policy 是最终安全边界
+
+模型输出仍是不可信输入。Executor 在写入前确定性检查：
+
+```text
+可信 Runtime user_id
+  → confidence >= 配置阈值（默认 0.75）
+  → ADD/UPDATE 正文不含敏感凭据
+  → ADD 与现有有效记忆不完全重复
+  → UPDATE/DELETE target 在本次候选 ID 中
+  → target 在当前 user_id namespace 中仍然存在
+  → 才调用 save/update/delete Memory Skill
+```
+
+任何检查失败都会把执行结果安全降级为 `NONE`，只在 State 中记录拒绝原因，不影响已经生成的 Agent 回答。ADD 使用由 `user_id + thread_id + 最新用户消息` 派生的稳定 key；UPDATE 使用当前用户 namespace 内的原 key；DELETE 继续软删除，因此节点重放不会悄悄产生多条重复记录。
+
+### 23.4 如何控制额外调用和显式记忆重复
+
+代码先做轻量候选判断。天气、计算、寒暄、普通问句直接 `NONE`；“我叫”“我喜欢”“我使用”“我正在”“我现在改用”“以后请”“我的目标”“忘记”等表达才调用结构化决策 LLM。
+
+“请记住”仍保留原有 Tool + interrupt 审批链。Memory Manager 会检查从最新 HumanMessage 开始的本轮消息；只要已经出现 `save_memory` 或 `delete_memory` Tool Call，就直接 `NONE`，不论用户最后批准还是拒绝，都不会在最终回答后再写一份。

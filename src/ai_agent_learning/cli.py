@@ -41,7 +41,15 @@ def create_agent_app(
     store: BaseStore | None = None,
 ):
     llm = create_llm(settings)
-    return build_graph(llm, TOOLS, checkpointer=checkpointer, store=store)
+    return build_graph(
+        llm,
+        TOOLS,
+        checkpointer=checkpointer,
+        store=store,
+        memory_confidence_threshold=(
+            settings.memory_manager_confidence_threshold
+        ),
+    )
 
 
 def prompt_user_id() -> str | None:

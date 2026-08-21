@@ -9,9 +9,11 @@
                          ↓
 用户输入 + thread_id + AgentContext(user_id)
                          ↓
-LangGraph → AgentNode → ToolNode → LangChain Tool → Skill
-    ↑          ↑            │             │
-    │          └─ ToolMessage┘             └─ SqliteStore（按 user_id 保存长期记忆）
+LangGraph → AgentNode ↔ ToolNode → LangChain Tool → Skill
+    │              │
+    │              └─ 最终回答 → Memory Manager → Memory Executor → END
+    │                                      │
+    │                                      └─ SqliteStore（按 user_id 保存长期记忆）
     └─ SqliteSaver（按 thread_id 持久化 State）
 ```
 
@@ -21,7 +23,9 @@ LangGraph → AgentNode → ToolNode → LangChain Tool → Skill
 - `ToolNode`：执行 LLM 生成的 Tool Calls。
 - `StateGraph`：编排 AgentNode、ToolNode、条件路由和 ReAct 循环。
 - `SqliteSaver`：按 `thread_id` 将 Checkpoint 保存到本地 SQLite 文件，支持程序重启后恢复会话。
-- `SqliteStore`：按 `user_id` namespace 持久化用户明确要求保存的长期记忆。
+- `SqliteStore`：按 `user_id` namespace 持久化显式批准或经 Memory Policy 通过的长期记忆。
+- `Memory Manager`：最终回答后只分析最新用户消息和当前用户 Top-K 记忆，输出结构化 ADD/UPDATE/DELETE/NONE。
+- `Memory Executor`：用确定性代码校验置信度、敏感信息、候选 ID 和用户归属，通过后才调用 Memory Skill。
 - `Human-in-the-loop`：`save_memory` 和 `delete_memory` 在写入前通过 `interrupt()` 请求人工审批。
 - `Error Recovery`：ToolNode 调用边界对错误分类；只有临时错误有限重试，超限后进入人工复核。
 - `legacy`：早期手写 Agent 代码，不进入当前运行链。
@@ -62,7 +66,7 @@ DEEPSEEK_API_KEY=your-real-key
 .venv\Scripts\python -m ai_agent_learning
 ```
 
-程序启动后依次输入用户 ID 和会话 ID；直接回车分别使用 `default_user` 和 `default`。`thread_id` 定位 Checkpoint 会话，`user_id` 定位跨会话长期记忆。同一用户更换 thread 后不会自动继承旧消息，但仍可通过记忆工具检索自己明确保存的事实。输入 `exit` 或 `quit` 退出。
+程序启动后依次输入用户 ID 和会话 ID；直接回车分别使用 `default_user` 和 `default`。`thread_id` 定位 Checkpoint 会话，`user_id` 定位跨会话长期记忆。同一用户更换 thread 后不会自动继承旧消息，但仍可检索自己已保存且有效的长期事实。输入 `exit` 或 `quit` 退出。
 
 会话过程中可以输入以下 Checkpoint 调试命令：
 
@@ -100,6 +104,17 @@ delete_memory(memory_id)           人工审批后软删除当前用户自己的
 
 `user_id` 和 Store 由 LangGraph `ToolRuntime` 注入，不会出现在 LLM 可填写的 Tool Schema 中。记忆使用本地 `minishlab/potion-multilingual-128M` Model2Vec 模型生成 256 维向量；模型第一次使用时下载到 Hugging Face 本机缓存，不需要新的付费 API Key。
 
+普通 ReAct 流程得到最终回答后，Memory Manager 使用相同 DeepSeek 模型的结构化输出能力判断最新用户消息。明显的天气、计算、寒暄、普通问句会直接得到 `NONE`，不产生额外模型调用。候选消息只读取当前 `user_id` 的 Top-K 旧记忆；模型看不到真实 `user_id`，也不能直接写 Store。默认只有置信度不低于 `0.75` 且通过代码策略的决定才执行。
+
+```text
+ADD     新增稳定且不重复的用户事实
+UPDATE  在当前用户候选范围内更新一条已有记忆
+DELETE  在当前用户候选范围内软删除一条已有记忆
+NONE    不修改长期记忆
+```
+
+显式“请记住”仍由原有 `save_memory + interrupt` 流程处理；Memory Manager 检测到本轮已经调用 `save_memory` 或 `delete_memory` 后会跳过，避免批准、拒绝或恢复执行之后产生重复写入。
+
 教学工具 `unstable_tool` 不访问真实网络：同一任务前两次固定抛出
 `TimeoutError`，第三次成功。临时错误的失败次数写入 AgentState；达到 3 次
 执行上限后 Graph 通过 `interrupt()` 提供：
@@ -112,7 +127,7 @@ exit      保留失败复核状态并退出；下次使用相同 thread_id 恢�
 
 参数错误返回 AgentNode 修正；权限、永久失败和副作用结果未知不会自动重试。
 
-当前 Checkpoint 数据保存在 `data/checkpoints.sqlite`，长期记忆保存在 `data/memories.sqlite`。两个数据库均由 `.gitignore` 排除，不提交用户数据。Checkpoint 保存 Graph 执行状态；长期记忆保存按用户隔离、明确批准的简洁事实。
+当前 Checkpoint 数据保存在 `data/checkpoints.sqlite`，长期记忆保存在 `data/memories.sqlite`。两个数据库均由 `.gitignore` 排除，不提交用户数据。Checkpoint 保存 Graph 执行状态；长期记忆保存按用户隔离、通过显式审批或 Memory Policy 的简洁事实。
 
 ## 测试
 
@@ -120,7 +135,7 @@ exit      保留失败复核状态并退出；下次使用相同 thread_id 恢�
 .venv\Scripts\python -m unittest discover -s tests -t . -v
 ```
 
-默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复及原有工具调用循环。
+默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、Memory Manager 四种决定、安全策略、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复及原有工具调用循环。
 
 ## 项目结构
 
@@ -133,7 +148,7 @@ src/ai_agent_learning/
 ├── llm.py              # DeepSeek LLM 创建
 ├── embeddings.py       # 本地多语言 Embedding 创建
 ├── logging_config.py   # 标准日志初始化
-├── agent/              # State、AgentNode、Graph、错误恢复、Checkpoint 与 Time Travel
+├── agent/              # State、AgentNode、Memory Manager、Graph、错误恢复与 Time Travel
 ├── tools/              # LangChain Tool 适配层
 └── skills/             # 业务能力
 

@@ -9,6 +9,7 @@ from typing_extensions import TypedDict
 
 MemoryType = Literal["preference", "profile", "fact", "instruction", "other"]
 MemoryStatus = Literal["active", "deleted"]
+MemorySource = Literal["user_explicit", "memory_manager"]
 
 
 class MemoryStore(Protocol):
@@ -39,7 +40,7 @@ class MemoryRecord(TypedDict):
     content: str
     user_id: str
     memory_type: MemoryType
-    source: Literal["user_explicit"]
+    source: MemorySource
     source_thread_id: str
     created_at: str
     updated_at: str
@@ -60,16 +61,20 @@ NEGATIVE_MEMORY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 SENSITIVE_PATTERNS = (
-    re.compile(r"\bapi[\s_-]*key\b", re.IGNORECASE),
-    re.compile(r"\baccess[\s_-]*token\b", re.IGNORECASE),
-    re.compile(r"\brefresh[\s_-]*token\b", re.IGNORECASE),
-    re.compile(r"\bpassword\b", re.IGNORECASE),
-    re.compile(r"\bverification[\s_-]*code\b", re.IGNORECASE),
-    re.compile(r"\botp\b", re.IGNORECASE),
-    re.compile(r"\bbearer\s+[a-z0-9._~+/=-]+", re.IGNORECASE),
-    re.compile(r"\bsk-[a-z0-9_-]{12,}\b", re.IGNORECASE),
-    re.compile(r"\bgh[pousr]_[a-z0-9]{12,}\b", re.IGNORECASE),
-    re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
+    re.compile(r"\bapi[\s_-]*key\b", re.IGNORECASE | re.ASCII),
+    re.compile(r"\baccess[\s_-]*token\b", re.IGNORECASE | re.ASCII),
+    re.compile(r"\brefresh[\s_-]*token\b", re.IGNORECASE | re.ASCII),
+    re.compile(r"\bpassword\b", re.IGNORECASE | re.ASCII),
+    re.compile(r"\bverification[\s_-]*code\b", re.IGNORECASE | re.ASCII),
+    re.compile(r"\botp\b", re.IGNORECASE | re.ASCII),
+    re.compile(
+        r"\bbearer\s+[a-z0-9._~+/=-]+", re.IGNORECASE | re.ASCII
+    ),
+    re.compile(r"\bsk-[a-z0-9_-]{12,}\b", re.IGNORECASE | re.ASCII),
+    re.compile(
+        r"\bgh[pousr]_[a-z0-9]{12,}\b", re.IGNORECASE | re.ASCII
+    ),
+    re.compile(r"\bAKIA[A-Z0-9]{16}\b", re.ASCII),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"密码|口令|验证码|访问令牌|密钥|私钥"),
 )
@@ -120,6 +125,7 @@ def save_memory(
     content: str,
     memory_type: MemoryType,
     source_thread_id: str,
+    source: MemorySource = "user_explicit",
 ) -> MemoryRecord:
     """Persist one approved, explicit user memory."""
     ensure_memory_is_safe(content)
@@ -134,7 +140,7 @@ def save_memory(
         "content": content,
         "user_id": user_id,
         "memory_type": memory_type,
-        "source": "user_explicit",
+        "source": source,
         "source_thread_id": source_thread_id,
         "created_at": created_at,
         "updated_at": now,
@@ -142,6 +148,51 @@ def save_memory(
     }
     store.put(namespace, memory_id, record)
     return record
+
+
+def get_memory(
+    store: MemoryStore,
+    *,
+    user_id: str,
+    memory_id: str,
+) -> MemoryRecord | None:
+    """Return one active memory only from the caller's user namespace."""
+    item = store.get(memory_namespace(user_id), memory_id)
+    if item is None or item.value.get("status") != "active":
+        return None
+    return item.value
+
+
+def update_memory(
+    store: MemoryStore,
+    *,
+    user_id: str,
+    memory_id: str,
+    content: str,
+    memory_type: MemoryType,
+    source_thread_id: str,
+    source: MemorySource = "memory_manager",
+) -> MemoryRecord | None:
+    """Safely replace one active memory inside the caller's namespace."""
+    ensure_memory_is_safe(content)
+    namespace = memory_namespace(user_id)
+    item = store.get(namespace, memory_id)
+    if item is None or item.value.get("status") != "active":
+        return None
+
+    updated: MemoryRecord = {
+        **item.value,
+        "memory_id": memory_id,
+        "content": content,
+        "user_id": user_id,
+        "memory_type": memory_type,
+        "source": source,
+        "source_thread_id": source_thread_id,
+        "updated_at": datetime.now(UTC).isoformat(),
+        "status": "active",
+    }
+    store.put(namespace, memory_id, updated)
+    return updated
 
 
 def search_memory(

@@ -76,6 +76,17 @@ def show_state_history(graph, thread_id: str):
         print(f"  error_type: {values.get('error_type', '<无>')}")
         print(f"  retry_count: {values.get('retry_count', '<无>')}")
         print(f"  max_retries: {values.get('max_retries', '<无>')}")
+        print(
+            "  memory_manager_status: "
+            f"{values.get('memory_manager_status', '<无>')}"
+        )
+        memory_decision = values.get("memory_decision") or {}
+        operation = (
+            memory_decision.get("operation", "<无>")
+            if isinstance(memory_decision, dict)
+            else "<无>"
+        )
+        print(f"  memory_operation: {operation}")
         print(f"  消息数量: {len(messages)}")
         if last_message is None:
             print("  最后一条消息: <无>")

@@ -25,6 +25,14 @@ AgentStatus = Literal[
     "cancelled",
 ]
 
+MemoryManagerStatus = Literal[
+    "skipped",
+    "decided",
+    "applied",
+    "rejected",
+    "failed",
+]
+
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -34,3 +42,7 @@ class AgentState(TypedDict):
     failed_node: NotRequired[str | None]
     retry_count: NotRequired[int]
     max_retries: NotRequired[int]
+    memory_decision: NotRequired[dict[str, object] | None]
+    memory_candidate_ids: NotRequired[list[str]]
+    memory_manager_status: NotRequired[MemoryManagerStatus]
+    memory_manager_error: NotRequired[str | None]

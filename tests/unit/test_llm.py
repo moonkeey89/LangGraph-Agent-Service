@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from ai_agent_learning.config import Settings
+from ai_agent_learning.agent.memory_manager import MemoryDecision
 from ai_agent_learning.llm import create_llm
 
 
@@ -37,6 +38,20 @@ class LlmFactoryTests(unittest.TestCase):
             base_url="https://api.deepseek.com",
             temperature=0.3,
         )
+
+    def test_current_deepseek_chat_wrapper_supports_structured_output(self):
+        settings = Settings(
+            _env_file=None,
+            deepseek_api_key="test-secret-key",
+        )
+
+        llm = create_llm(settings)
+        structured_llm = llm.with_structured_output(
+            MemoryDecision,
+            method="function_calling",
+        )
+
+        self.assertIsNotNone(structured_llm)
 
 
 if __name__ == "__main__":

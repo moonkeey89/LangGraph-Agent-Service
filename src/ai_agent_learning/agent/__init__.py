@@ -4,6 +4,7 @@ from ai_agent_learning.agent.checkpoint_debug import (
     show_state_history,
 )
 from ai_agent_learning.agent.graph import build_graph
+from ai_agent_learning.agent.memory_manager import MemoryDecision
 from ai_agent_learning.agent.error_recovery import (
     DEFAULT_MAX_RETRIES,
     PermanentToolError,
@@ -27,6 +28,7 @@ from ai_agent_learning.agent.time_travel import (
 __all__ = [
     "AgentContext",
     "build_graph",
+    "MemoryDecision",
     "show_current_state",
     "show_state_history",
     "checkpoint_id",

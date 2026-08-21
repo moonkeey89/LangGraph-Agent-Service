@@ -22,6 +22,7 @@ class SettingsTests(unittest.TestCase):
             "minishlab/potion-multilingual-128M",
         )
         self.assertEqual(settings.memory_embedding_dimensions, 256)
+        self.assertEqual(settings.memory_manager_confidence_threshold, 0.75)
         self.assertEqual(settings.log_level, "INFO")
         self.assertNotIn("test-secret-key", repr(settings))
 
@@ -33,6 +34,7 @@ class SettingsTests(unittest.TestCase):
             "DEEPSEEK_TEMPERATURE": "0.2",
             "MEMORY_EMBEDDING_MODEL": "test/embedding-model",
             "MEMORY_EMBEDDING_DIMENSIONS": "128",
+            "MEMORY_MANAGER_CONFIDENCE_THRESHOLD": "0.8",
             "LOG_LEVEL": "debug",
         }
 
@@ -48,6 +50,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.deepseek_temperature, 0.2)
         self.assertEqual(settings.memory_embedding_model, "test/embedding-model")
         self.assertEqual(settings.memory_embedding_dimensions, 128)
+        self.assertEqual(settings.memory_manager_confidence_threshold, 0.8)
         self.assertEqual(settings.log_level, "DEBUG")
 
     def test_api_key_is_required(self):
@@ -69,6 +72,14 @@ class SettingsTests(unittest.TestCase):
                 _env_file=None,
                 deepseek_api_key="test-secret-key",
                 memory_embedding_dimensions=0,
+            )
+
+    def test_memory_confidence_threshold_must_be_between_zero_and_one(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                deepseek_api_key="test-secret-key",
+                memory_manager_confidence_threshold=1.1,
             )
 
 

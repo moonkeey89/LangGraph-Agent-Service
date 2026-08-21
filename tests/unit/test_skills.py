@@ -11,6 +11,7 @@ from ai_agent_learning.skills import (
     save_memory,
     search_memory,
     search_attraction,
+    update_memory,
 )
 from ai_agent_learning.skills.memory import (
     ensure_memory_is_safe,
@@ -94,6 +95,27 @@ class SkillTests(unittest.TestCase):
         self.assertFalse(
             delete_memory(store, user_id="user_002", memory_id="memory-1")
         )
+        self.assertIsNone(
+            update_memory(
+                store,
+                user_id="user_002",
+                memory_id="memory-1",
+                content="越权修改",
+                memory_type="fact",
+                source_thread_id="thread_B",
+            )
+        )
+        updated = update_memory(
+            store,
+            user_id="user_001",
+            memory_id="memory-1",
+            content="我现在主要使用Python和LangGraph",
+            memory_type="preference",
+            source_thread_id="thread_B",
+        )
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated["source"], "memory_manager")
+        self.assertEqual(updated["source_thread_id"], "thread_B")
         self.assertTrue(
             delete_memory(store, user_id="user_001", memory_id="memory-1")
         )
@@ -110,6 +132,8 @@ class SkillTests(unittest.TestCase):
             extract_explicit_memory("不要记住，我主要使用Python")
         with self.assertRaises(MemoryPolicyError):
             ensure_memory_is_safe("我的 API Key 是 sk-abcdefghijklmnop")
+        with self.assertRaises(MemoryPolicyError):
+            ensure_memory_is_safe("我的API Key是sk-test-123456789")
 
     def test_semantic_search_is_limited_to_three_memories(self):
         store = InMemoryStore(

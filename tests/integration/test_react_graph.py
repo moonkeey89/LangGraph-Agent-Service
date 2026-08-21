@@ -147,6 +147,8 @@ class ReactGraphTests(unittest.TestCase):
                 "tool_success",
                 "human_review",
                 "failure",
+                "memory_manager",
+                "memory_executor",
                 "__end__",
             },
         )
@@ -154,9 +156,11 @@ class ReactGraphTests(unittest.TestCase):
             {
                 ("__start__", "agent"),
                 ("agent", "tools"),
-                ("agent", "__end__"),
+                ("agent", "memory_manager"),
                 ("tools", "tool_success"),
                 ("tool_success", "agent"),
+                ("memory_manager", "memory_executor"),
+                ("memory_executor", "__end__"),
             }.issubset(edges)
         )
 

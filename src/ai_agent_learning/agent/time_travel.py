@@ -76,9 +76,9 @@ def _pending_tool_names(snapshot) -> set[str]:
 def describe_replay_nodes(snapshot) -> tuple[str, ...]:
     """Describe the known node prefix that will run from this checkpoint."""
     if snapshot.next == ("tools",):
-        return ("tools", "agent")
+        return ("tools", "agent", "memory_manager", "memory_executor")
     if snapshot.next == ("agent",):
-        return ("agent",)
+        return ("agent", "memory_manager", "memory_executor")
     return tuple(snapshot.next)
 
 
