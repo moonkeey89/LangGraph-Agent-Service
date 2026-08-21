@@ -2,7 +2,9 @@
 
 from datetime import UTC, datetime
 import re
-from typing import Any, Literal, Protocol, TypedDict
+from typing import Any, Literal, Protocol
+
+from typing_extensions import TypedDict
 
 
 MemoryType = Literal["preference", "profile", "fact", "instruction", "other"]

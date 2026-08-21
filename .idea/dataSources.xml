@@ -8,5 +8,12 @@
       <jdbc-url>jdbc:sqlite:E:\AI-Agent-Projects\AI-Agent-Learning\data\checkpoints.sqlite</jdbc-url>
       <working-dir>$ProjectFileDir$</working-dir>
     </data-source>
+    <data-source source="LOCAL" name="memories" uuid="72d40f3a-fa58-40ff-975f-eba3c2817801">
+      <driver-ref>sqlite.xerial</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
+      <jdbc-url>jdbc:sqlite:E:\AI-Agent-Projects\AI-Agent-Learning\data\memories.sqlite</jdbc-url>
+      <working-dir>$ProjectFileDir$</working-dir>
+    </data-source>
   </component>
 </project>
