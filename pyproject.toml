@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 ai-agent-learning = "ai_agent_learning.cli:main"
+ai-agent-learning-multi = "ai_agent_learning.multi_agent_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -50,8 +50,13 @@ def build_graph(
     store: BaseStore | None = None,
     memory_manager_llm: BaseChatModel | None = None,
     memory_confidence_threshold: float = DEFAULT_MEMORY_CONFIDENCE_THRESHOLD,
+    agent_system_prompt: str | None = None,
 ):
-    agent = AgentNode(llm, tools)
+    agent = AgentNode(
+        llm,
+        tools,
+        additional_system_prompt=agent_system_prompt,
+    )
     memory_manager = MemoryManagerNode(memory_manager_llm or llm)
     memory_executor = MemoryExecutorNode(memory_confidence_threshold)
     memory_recall = MemoryRecallNode()

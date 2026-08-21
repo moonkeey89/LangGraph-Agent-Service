@@ -1,3 +1,4 @@
+import operator
 from typing import Annotated, Literal
 
 from typing_extensions import NotRequired, TypedDict
@@ -36,6 +37,15 @@ MemoryManagerStatus = Literal[
 MemoryRecallStatus = Literal["skipped", "completed", "failed"]
 
 
+class SubagentCallRecord(TypedDict):
+    call_id: str
+    turn_id: str
+    agent_name: str
+    task: str
+    signature: str
+    status: str
+
+
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     status: NotRequired[AgentStatus]
@@ -51,3 +61,6 @@ class AgentState(TypedDict):
     recalled_memories: NotRequired[list[dict[str, object]]]
     memory_recall_status: NotRequired[MemoryRecallStatus]
     memory_recall_error: NotRequired[str | None]
+    subagent_calls: NotRequired[
+        Annotated[list[SubagentCallRecord], operator.add]
+    ]

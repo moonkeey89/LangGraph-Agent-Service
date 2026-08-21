@@ -98,6 +98,15 @@ def show_state_history(graph, thread_id: str):
             else 0
         )
         print(f"  recalled_memory_count: {recalled_count}")
+        subagent_calls = values.get("subagent_calls", [])
+        print(f"  subagent_call_count: {len(subagent_calls)}")
+        if subagent_calls:
+            latest_call = subagent_calls[-1]
+            print(
+                "  latest_subagent_call: "
+                f"{latest_call.get('agent_name', '<无>')} / "
+                f"{latest_call.get('status', '<无>')}"
+            )
         print(f"  消息数量: {len(messages)}")
         if last_message is None:
             print("  最后一条消息: <无>")

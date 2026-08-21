@@ -23,6 +23,7 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertEqual(settings.memory_embedding_dimensions, 256)
         self.assertEqual(settings.memory_manager_confidence_threshold, 0.75)
+        self.assertEqual(settings.supervisor_max_subagent_calls, 4)
         self.assertEqual(settings.log_level, "INFO")
         self.assertNotIn("test-secret-key", repr(settings))
 
@@ -35,6 +36,7 @@ class SettingsTests(unittest.TestCase):
             "MEMORY_EMBEDDING_MODEL": "test/embedding-model",
             "MEMORY_EMBEDDING_DIMENSIONS": "128",
             "MEMORY_MANAGER_CONFIDENCE_THRESHOLD": "0.8",
+            "SUPERVISOR_MAX_SUBAGENT_CALLS": "5",
             "LOG_LEVEL": "debug",
         }
 
@@ -51,6 +53,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.memory_embedding_model, "test/embedding-model")
         self.assertEqual(settings.memory_embedding_dimensions, 128)
         self.assertEqual(settings.memory_manager_confidence_threshold, 0.8)
+        self.assertEqual(settings.supervisor_max_subagent_calls, 5)
         self.assertEqual(settings.log_level, "DEBUG")
 
     def test_api_key_is_required(self):
@@ -80,6 +83,14 @@ class SettingsTests(unittest.TestCase):
                 _env_file=None,
                 deepseek_api_key="test-secret-key",
                 memory_manager_confidence_threshold=1.1,
+            )
+
+    def test_supervisor_max_subagent_calls_must_be_positive(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                deepseek_api_key="test-secret-key",
+                supervisor_max_subagent_calls=0,
             )
 
 

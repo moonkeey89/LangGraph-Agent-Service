@@ -1,6 +1,6 @@
 # AI Agent Learning
 
-这是一个用于学习 AI Agent 工程开发的项目。当前实现使用 LangChain Tool 和 LangGraph 构建基础 ReAct Agent，并保留早期手写架构作为学习资料。
+这是一个用于学习 AI Agent 工程开发的项目。当前实现使用 LangChain Tool 和 LangGraph 构建基础 ReAct Agent，并提供可独立启动的 Supervisor + Travel/Math Subagents 教学模式；早期手写架构继续作为学习资料保留。
 
 ## 架构边界
 
@@ -30,6 +30,23 @@ LangGraph → Memory Recall → AgentNode ↔ ToolNode → LangChain Tool → Sk
 - `Human-in-the-loop`：`save_memory` 和 `delete_memory` 在写入前通过 `interrupt()` 请求人工审批。
 - `Error Recovery`：ToolNode 调用边界对错误分类；只有临时错误有限重试，超限后进入人工复核。
 - `legacy`：早期手写 Agent 代码，不进入当前运行链。
+
+多 Agent 模式复用同一套主图基础设施：
+
+```text
+用户 → Memory Recall → Supervisor Agent
+                         ├─ ask_travel_agent(task)
+                         │      └─ Travel ReAct → get_weather/search_attraction
+                         ├─ ask_math_agent(task)
+                         │      └─ Math ReAct → calculate
+                         └─ 直接回答
+                                  ↓
+                         Supervisor统一最终回答
+                                  ↓
+                         Memory Manager（每轮一次）→ END
+```
+
+Supervisor 的主 State 和高层 handoff 记录继续由 `thread_id` Checkpoint；两个 Subagent 每次只接收一个最小任务字符串，无 Checkpointer、无长期记忆、无独立 `thread_id`。它们只返回结构化结果摘要，内部 ToolMessage 不进入主会话。
 
 ## 环境要求
 
@@ -61,10 +78,22 @@ DEEPSEEK_API_KEY=your-real-key
 .venv\Scripts\python main.py
 ```
 
+启动 Supervisor 多 Agent 教学模式：
+
+```powershell
+.venv\Scripts\python multi_agent_main.py
+```
+
 也可以在安装后使用：
 
 ```powershell
 .venv\Scripts\python -m ai_agent_learning
+```
+
+以 editable 方式安装后，也可以运行：
+
+```powershell
+ai-agent-learning-multi
 ```
 
 程序启动后依次输入用户 ID 和会话 ID；直接回车分别使用 `default_user` 和 `default`。`thread_id` 定位 Checkpoint 会话，`user_id` 定位跨会话长期记忆。同一用户更换 thread 后不会自动继承旧消息，但仍可检索自己已保存且有效的长期事实。输入 `exit` 或 `quit` 退出。
@@ -139,12 +168,14 @@ exit      保留失败复核状态并退出；下次使用相同 thread_id 恢�
 ```
 
 默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、Memory Manager 四种决定、安全策略、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复及原有工具调用循环。
+多 Agent 测试还覆盖旅游/计算单领域路由、跨领域串行协作、能力隔离、普通问题直答、部分失败整合、重复 handoff 熔断、最大调用次数以及 Supervisor 主会话的 SQLite 恢复。
 
 ## 项目结构
 
 ```text
 src/ai_agent_learning/
 ├── cli.py              # CLI 入口与最外层错误边界
+├── multi_agent_cli.py  # Supervisor 模式入口，复用原 CLI 交互
 ├── checkpoint.py       # SQLite Checkpointer 路径和连接生命周期
 ├── memory_store.py     # SQLite 长期记忆 Store 路径和连接生命周期
 ├── config.py           # 配置加载和校验
@@ -152,6 +183,7 @@ src/ai_agent_learning/
 ├── embeddings.py       # 本地多语言 Embedding 创建
 ├── logging_config.py   # 标准日志初始化
 ├── agent/              # State、AgentNode、Memory Manager、Graph、错误恢复与 Time Travel
+├── agents/             # Supervisor、Travel/Math Subagent 与高层 handoff Tools
 ├── tools/              # LangChain Tool 适配层
 └── skills/             # 业务能力
 
@@ -168,10 +200,10 @@ data/                   # 本地 Checkpoint 目录（数据库文件不提交 Gi
 
 ## 当前范围
 
-当前项目覆盖基础 LangGraph ReAct Agent、SQLite 持久化短期会话和第一阶段显式长期记忆，暂未实现：
+当前项目覆盖基础 LangGraph ReAct Agent、SQLite 持久化短期会话、长期记忆与最小 Supervisor/Subagents 协作，暂未实现：
 
-- 自动 Memory Manager、自动事实提取与冲突合并
+- 复杂自动事实拆分与冲突合并
 - RAG
 - FastAPI
-- Multi-Agent
+- 并行 Subagent、Critic/Writer Agent 或群聊
 - 部署与容器化

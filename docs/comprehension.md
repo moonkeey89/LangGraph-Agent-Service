@@ -1810,3 +1810,96 @@ Memory Manager 解决写入和维护，但它位于最终回答之后，无法�
 ```
 
 Recall 不把 `user_id` 或全部记忆交给模型。天气、计算、寒暄等问题直接跳过；Store异常安全降级为空召回，不影响主Agent回答。
+
+---
+
+## 24. Supervisor + Subagents 最小协作
+
+### 24.1 为什么使用“Subagent as Tool”
+
+当前版本没有引入额外的 supervisor 库。LangGraph 1.2.11 已经能够用现有 `StateGraph`、`ToolNode` 和 `Command` 完成最小协作：把一个短生命周期的专业 ReAct Graph 包装成 Supervisor 可调用的高层 Tool。
+
+```text
+Supervisor看见：ask_travel_agent(task)、ask_math_agent(task)
+Travel看见：get_weather、search_attraction
+Math看见：calculate
+```
+
+能力边界由绑定的 Tool 集合确定，不只是依赖 Prompt。Travel Agent 根本没有 `calculate` 的 schema；Math Agent 也没有天气和景点工具，因此模型即使想越权也无法通过 ToolNode 执行。
+
+### 24.2 主图和子图的状态边界
+
+Supervisor 继续使用完整主图：
+
+```text
+Memory Recall
+  → Supervisor Agent ↔ Supervisor ToolNode
+  → Supervisor最终回答
+  → Memory Manager
+  → Memory Executor
+  → END
+```
+
+`ask_travel_agent` 或 `ask_math_agent` 被 ToolNode 执行时，会创建一次无状态子图调用：
+
+```text
+task字符串
+  → Subagent AgentNode
+  → 只读专业ToolNode
+  → Subagent最终摘要
+  → JSON ToolMessage返回Supervisor
+```
+
+Subagent 不接收主会话的 messages、`user_id`、`thread_id`、Store 或 Checkpointer。Supervisor 如果认为某条已召回的长期记忆与子任务相关，只能把必要事实写进 `task`；这样不会默认把完整对话和全部用户资料扩散到专业 Agent。
+
+### 24.3 Checkpoint 和 Memory Manager 放在哪里
+
+第一版只有 Supervisor 主图被 SQLite Checkpointer 编译：
+
+```text
+thread_id
+  → Supervisor messages
+  → 高层 ToolMessage
+  → subagent_calls 调用记录
+  → interrupt / retry / Checkpoint历史
+```
+
+Subagent 内部的天气、景点、计算消息不会进入主 Checkpoint。长期 Store 仍由主图基于可信 `AgentContext.user_id` 访问；Subagent 无权生成或修改用户身份。Memory Manager 位于 Supervisor 最终回答之后，所以复合任务无论调用几个 Subagent，每轮都只执行一次记忆判断。
+
+### 24.4 高层 handoff 结果
+
+Subagent 向 Supervisor 返回 JSON 可序列化摘要：
+
+```text
+agent_name
+status=success/failed
+result
+error
+retry_recommended
+```
+
+内部消息和底层 Tool Call 不会返回。某个 Subagent 失败时，失败被当成高层 Tool 结果交给 Supervisor；Supervisor 仍能整合其他已完成结果，例如旅游查询失败但预算计算成功。
+
+### 24.5 循环保护
+
+主 State 增加追加式 `subagent_calls`：
+
+```text
+call_id、turn_id、agent_name、task、signature、status
+```
+
+每个新 HumanMessage 形成新的 `turn_id`。Dispatcher 在执行前检查：
+
+1. 同一轮高层调用是否达到 `supervisor_max_subagent_calls`（默认 4）；
+2. 同一 Agent 和标准化 task 是否已经执行过。
+
+任何一项不满足都会产生 `blocked` 记录并进入安全失败路径，真实 Subagent 不会再次执行。调用记录由主 Checkpointer 持久化，因此程序重启不会丢失正在进行的协调边界。
+
+### 24.6 两种入口为什么同时保留
+
+```text
+main.py              → 原单 Agent，保留全部底层 Tools
+multi_agent_main.py  → Supervisor，只绑定高层 Subagent Tools 和记忆 Tools
+```
+
+多 Agent 是独立实验入口，不改变原单 Agent 的调用链。两种模式共用 Settings、LLM Factory、Skills、Tool adapters、SQLite Checkpointer、长期 Store、日志、CLI 审批和 Time Travel 命令，避免复制已经验证过的工程基础设施。

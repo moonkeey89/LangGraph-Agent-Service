@@ -21,12 +21,20 @@ ToolMessage 是工具是否成功的唯一事实来源。如果工具返回拒�
 
 
 class AgentNode:
-    def __init__(self, llm: BaseChatModel, tools: Sequence[BaseTool]):
+    def __init__(
+        self,
+        llm: BaseChatModel,
+        tools: Sequence[BaseTool],
+        additional_system_prompt: str | None = None,
+    ):
         self.llm = llm.bind_tools(tools)
+        self.additional_system_prompt = additional_system_prompt
 
     def run(self, state: AgentState) -> dict[str, object]:
         logger.debug("Invoking agent model")
         system_content = _AGENT_SYSTEM_PROMPT
+        if self.additional_system_prompt:
+            system_content += f"\n\n{self.additional_system_prompt.strip()}"
         recalled_memories = state.get("recalled_memories", [])
         if recalled_memories:
             system_content += (

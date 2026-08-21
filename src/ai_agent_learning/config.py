@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     memory_embedding_model: str = "minishlab/potion-multilingual-128M"
     memory_embedding_dimensions: int = 256
     memory_manager_confidence_threshold: float = 0.75
+    supervisor_max_subagent_calls: int = 4
     log_level: str = "INFO"
 
     @field_validator("memory_embedding_dimensions")
@@ -24,6 +25,13 @@ class Settings(BaseSettings):
     def validate_memory_confidence_threshold(cls, value: float) -> float:
         if not 0.0 <= value <= 1.0:
             raise ValueError("Memory Manager 置信度阈值必须在 0 到 1 之间")
+        return value
+
+    @field_validator("supervisor_max_subagent_calls")
+    @classmethod
+    def validate_max_subagent_calls(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Supervisor 最大 Subagent 调用次数必须是正整数")
         return value
 
     model_config = SettingsConfigDict(
