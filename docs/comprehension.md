@@ -2028,3 +2028,49 @@ Command(resume={"action": "cancel", "reason": "..."})
 retry/cancel。API 首轮还把可信 `user_id` 保存为 `session_user_id`，防止另一个请求头
 用户仅凭猜中 thread_id 就读取 Checkpoint 会话；长期记忆仍然只通过 Runtime 中的
 `AgentContext.user_id` 访问用户 namespace。
+
+---
+
+## 27. SSE 流式输出
+
+非流式 `/invoke` 要等 Graph 完整结束后一次返回 JSON。SSE `/stream` 保留同一条
+Graph 调用，只把执行期间的安全投影持续发送给客户端：
+
+```text
+POST /api/v1/agent/stream
+  → InvokeRequest + X-User-ID
+  → AgentService.stream
+  → 同一同步 graph.stream（只执行一次）
+       stream_mode=["updates", "messages"], version="v2"
+  → 安全事件适配
+  → FastAPI EventSourceResponse
+```
+
+`updates` 中只读取节点名称，丢弃节点返回的 State 内容，再映射成固定进度文案。
+`messages` 会包含 Graph 内所有 LLM 调用的片段，因此不能直接透传：Subagent、Critic、
+Memory Manager 的片段全部忽略；只缓存 Supervisor `agent` 或 `revise` 的普通 text
+片段，并在 Graph 完成后确认拼接结果等于 `final_answer` 才发送。这样不会把未审查
+草稿、结构化 Critic JSON、推理块或工具参数暴露出去。
+
+公开协议只有：
+
+```text
+started      {thread_id}
+progress     {stage, node, message}
+token        {content}
+interrupted  {thread_id, interrupts}
+completed    {thread_id, answer}
+error        {thread_id, code, message}
+```
+
+每次合法流先发送 `started`，最后只发送 `completed/interrupted/error` 之一。interrupt
+仍由 SQLite Checkpoint 保存，后续使用原 `/resume` 和相同 thread/user 恢复，流接口
+不会自动批准，也不会再次执行 Graph。
+
+当前 Graph、SqliteSaver 和 Store 都是同步实现。异步 SSE 适配器把整个同步迭代放在
+同一个 AnyIO 工作线程中，保证 `RLock` 的获得和释放发生在同一线程；容量为1的内存
+通道提供背压。FastAPI 0.141.1 原生 SSE 响应负责 UTF-8 JSON 事件编码、15秒空闲
+ping、`Cache-Control: no-cache`、`X-Accel-Buffering: no` 和断开时取消响应生成器。
+服务适配器收到关闭后设置停止标志，在下一个 LangGraph chunk 边界关闭同步迭代。
+同步 DeepSeek HTTP 调用若正阻塞在网络等待中，第一版不能在任意指令中间强制终止，
+但不会在断开后主动启动第二次 Graph 或重放副作用。

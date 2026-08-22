@@ -1,7 +1,9 @@
 import logging
+from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from starlette.concurrency import run_in_threadpool
 
 from ai_agent_learning.api.dependencies import get_agent_service, get_user_id
@@ -68,3 +70,31 @@ async def resume_agent(
         reason=request.reason,
     )
     return _response(result)
+
+
+@router.post(
+    "/api/v1/agent/stream",
+    response_class=EventSourceResponse,
+)
+async def stream_agent(
+    request: InvokeRequest,
+    http_request: Request,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[AgentService, Depends(get_agent_service)],
+) -> AsyncIterator[ServerSentEvent]:
+    event_stream = service.stream(
+        message=request.message,
+        thread_id=request.thread_id,
+        user_id=user_id,
+    )
+    try:
+        async for item in event_stream:
+            if await http_request.is_disconnected():
+                logger.info(
+                    "SSE client disconnected thread_id=%s",
+                    request.thread_id,
+                )
+                break
+            yield ServerSentEvent(event=item.event, data=item.data)
+    finally:
+        await event_stream.aclose()

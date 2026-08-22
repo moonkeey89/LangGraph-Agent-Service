@@ -115,12 +115,36 @@ Checkpointer 和长期记忆 Store，在关闭时释放两个 SQLite 连接。HT
 GET  /health
 POST /api/v1/agent/invoke
 POST /api/v1/agent/resume
+POST /api/v1/agent/stream
 ```
 
 `X-User-ID` 是必填可信请求头；`thread_id` 在 JSON 请求体中。首次 API 调用会把
 两者的归属写入 Checkpoint，后续请求无法使用另一个用户接管同一个 thread。
 已有但不含该归属字段的旧 CLI thread 不会被 API 自动认领，请为 API 使用新的
 `thread_id`。CLI 的原有入口和数据库行为不受影响。
+
+SSE 流式接口使用与 `/invoke` 完全相同的请求体和 `X-User-ID`：
+
+```powershell
+curl.exe -N -X POST http://127.0.0.1:8000/api/v1/agent/stream `
+  -H "Content-Type: application/json" `
+  -H "X-User-ID: user_001" `
+  -d '{"message":"查询北京天气并计算500乘以3","thread_id":"sse_001"}'
+```
+
+响应采用 `text/event-stream`，公开事件依次可能包含：
+
+```text
+started → progress* → token* → completed
+started → progress* → interrupted
+started → progress* → error
+```
+
+流式调用只执行一次原 Supervisor Graph。节点进度来自 LangGraph `updates`；文本
+片段来自 `messages`，但 Supervisor 草稿必须先经过 Critic，因此真实片段会暂存到
+Finalize 确定答案后再发送。Critic、Memory Manager 和 Subagent 的模型片段不会对外
+输出；若模型集成未提供可验证的真实片段，则只返回进度和完整 `completed.answer`，
+不会用定时器伪造 token。流中出现 `interrupted` 后，仍使用原 `/resume` 接口恢复。
 
 程序启动后依次输入用户 ID 和会话 ID；直接回车分别使用 `default_user` 和 `default`。`thread_id` 定位 Checkpoint 会话，`user_id` 定位跨会话长期记忆。同一用户更换 thread 后不会自动继承旧消息，但仍可检索自己已保存且有效的长期事实。输入 `exit` 或 `quit` 退出。
 
@@ -193,7 +217,7 @@ exit      保留失败复核状态并退出；下次使用相同 thread_id 恢�
 .venv\Scripts\python -m unittest discover -s tests -t . -v
 ```
 
-默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、Memory Manager 四种决定、安全策略、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复、FastAPI invoke/resume 及原有工具调用循环。
+默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、Memory Manager 四种决定、安全策略、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复、FastAPI invoke/resume/SSE 及原有工具调用循环。
 多 Agent 测试还覆盖旅游/计算单领域路由、跨领域串行协作、能力隔离、普通问题直答、部分失败整合、重复 handoff 熔断、最大调用次数以及 Supervisor 主会话的 SQLite 恢复。Critic 测试覆盖 PASS、遗漏修订、矛盾修订、单次修订上限、结构化输出失败降级、上下文最小化以及 Memory Manager 执行顺序。
 
 ## 项目结构
@@ -227,10 +251,10 @@ data/                   # 本地 Checkpoint 目录（数据库文件不提交 Gi
 
 ## 当前范围
 
-当前项目覆盖基础 LangGraph ReAct Agent、SQLite 持久化短期会话、长期记忆、最小 Supervisor/Subagents 协作、单次 Critic 审查与 FastAPI 非流式接口，暂未实现：
+当前项目覆盖基础 LangGraph ReAct Agent、SQLite 持久化短期会话、长期记忆、最小 Supervisor/Subagents 协作、单次 Critic 审查以及 FastAPI 非流式与 SSE 接口，暂未实现：
 
 - 复杂自动事实拆分与冲突合并
 - RAG
-- SSE、WebSocket 或前端
+- WebSocket、聊天前端或 SSE 断线补发
 - 并行 Subagent、多轮反思、多个 Critic、Writer Agent 或群聊
 - 部署与容器化
