@@ -1903,3 +1903,128 @@ multi_agent_main.py  → Supervisor，只绑定高层 Subagent Tools 和记忆 T
 ```
 
 多 Agent 是独立实验入口，不改变原单 Agent 的调用链。两种模式共用 Settings、LLM Factory、Skills、Tool adapters、SQLite Checkpointer、长期 Store、日志、CLI 审批和 Time Travel 命令，避免复制已经验证过的工程基础设施。
+
+---
+
+## 25. Critic Agent 单次审查闭环
+
+### 25.1 Critic 插入在哪里
+
+原 Supervisor 在不再生成 Tool Call 时，最后一条 AIMessage 就是准备展示的回答。现在通过主图的可选 `PostAnswerWorkflow`，只在 Supervisor 正常回答边插入：
+
+```text
+Supervisor ReAct完成
+  → capture_draft
+  → critic
+      ├─ PASS → finalize
+      └─ REVISE且revision_count < 1 → revise → finalize
+  → memory_manager
+  → memory_executor
+  → END
+```
+
+原单 Agent 没有传入这个可选 workflow，所以仍然是 `agent → memory_manager`。Supervisor 的 failure、人工取消等确定性结束路径也不经过 Critic，直接沿用原失败处理。
+
+### 25.2 为什么要捕获并移除草稿
+
+AgentNode 按 LangGraph `add_messages` 语义先把 Supervisor 草稿写入 State。`capture_draft` 将正文保存到 `draft_answer`，再用 `RemoveMessage` 从 messages 中移除草稿。Finalize 最后才写入唯一的用户可见 AIMessage。
+
+这样可以避免：
+
+```text
+下一轮主会话同时看到“旧草稿 + 修订答案”
+CLI把未经审查的草稿当成最终答案
+Memory Manager意外把Critic内部消息当成会话内容
+```
+
+Critic 和 Revision 调用时构造的 SystemMessage/HumanMessage 只直接传给对应模型，不作为节点更新写入主 `messages`。
+
+### 25.3 CriticDecision 和最小上下文
+
+结构化结果包含：
+
+```text
+verdict      PASS / REVISE
+issues       具体问题列表
+suggestions  修改建议列表
+severity     none / low / medium / high
+reason       判断理由
+```
+
+Critic 没有 ToolNode，也不绑定任何业务 Tool。输入 JSON 只有：
+
+```text
+user_request      当前轮原始用户请求
+draft_answer      Supervisor草稿
+subagent_results  当前轮ask_travel/ask_math的最终JSON摘要
+user_constraints  从当前请求中提取的直接约束
+```
+
+构造器从最近一条 HumanMessage 开始读取，只保留高层 Subagent 结果的 `agent_name/status/result/error/retry_recommended`，不会传递旧会话、底层 ToolMessage、长期记忆全集、user_id、thread_id、Runtime 或内部轨迹。
+
+### 25.4 为什么修订节点也没有工具
+
+RevisionNode 只接收原请求、草稿、issues、suggestions、已有 Subagent 摘要和约束，调用未绑定工具的聊天模型生成修订文本。它不能重新查询天气或再次计算，因此一次审查不会悄悄重复 Subagent 调用或副作用。
+
+第一版固定：
+
+```text
+max_revisions = 1
+critic只运行一次
+revise之后直接finalize
+```
+
+`route_after_critic` 同时检查 `revision_count` 和 `max_revisions`。达到上限后直接 Finalize，并将原 Critic issues 写入 `unresolved_critic_issues`，表示这些问题没有经过第二轮复核，而不是声称已经完全解决。
+
+### 25.5 失败降级与持久化
+
+Critic 结构化输出解析失败时：
+
+```text
+critic_status=failed
+critic_error=异常类型和原因
+critic_decision=None
+  → finalize使用draft_answer
+```
+
+Revision 失败也保留错误并回退草稿。两者都不会覆盖 user_id、thread_id、Subagent结果或 Memory Store。Critic 字段、草稿、修订次数和最终答案属于 Supervisor 主 State，因此由原 `thread_id` 的 SQLite Checkpointer 保存。
+
+Finalize 之后才进入原 Memory Manager，所以无论 PASS、REVISE 或 Critic 失败，每轮都只有一次记忆判断；Critic 的评价和临时提示从未成为 HumanMessage，不会被当成用户事实保存。
+
+---
+
+## 26. FastAPI 非流式服务化
+
+FastAPI 不是新的 Agent 编排层，它只是把原有同步 Graph 包装成 HTTP 边界：
+
+```text
+HTTP JSON + X-User-ID
+  → Pydantic参数校验
+  → AgentService
+      ├─ message → HumanMessage
+      ├─ thread_id → config.configurable.thread_id
+      └─ user_id → AgentContext.user_id
+  → Supervisor LangGraph（在线程池执行同步 invoke）
+  → completed / interrupted HTTP JSON
+```
+
+应用 lifespan 启动时创建一次 Settings、LLM、Embedding、SqliteSaver、
+SqliteStore 和编译后的 Supervisor Graph，请求之间复用这些资源；关闭时退出两个
+SQLite context manager。第一版用锁串行保护共享的同步 SQLite 连接，因此不会堵塞
+FastAPI 事件循环，但吞吐量有限。
+
+`POST /invoke` 只在没有 pending interrupt 时添加新的 HumanMessage。
+Graph 暂停时，interrupt 的 JSON payload 会成为 `status=interrupted` 的正常响应，
+不是 HTTP 500。`POST /resume` 校验同一用户和同一 thread 后，使用：
+
+```text
+Command(resume={"approved": true})
+Command(resume={"approved": false, "reason": "..."})
+Command(resume={"action": "retry"})
+Command(resume={"action": "cancel", "reason": "..."})
+```
+
+恢复值不会伪装成 HumanMessage。审批 interrupt 只接受 approve/reject，失败复核只接受
+retry/cancel。API 首轮还把可信 `user_id` 保存为 `session_user_id`，防止另一个请求头
+用户仅凭猜中 thread_id 就读取 Checkpoint 会话；长期记忆仍然只通过 Runtime 中的
+`AgentContext.user_id` 访问用户 namespace。

@@ -35,6 +35,12 @@ MemoryManagerStatus = Literal[
 ]
 
 MemoryRecallStatus = Literal["skipped", "completed", "failed"]
+CriticStatus = Literal[
+    "pending",
+    "passed",
+    "revision_required",
+    "failed",
+]
 
 
 class SubagentCallRecord(TypedDict):
@@ -48,6 +54,7 @@ class SubagentCallRecord(TypedDict):
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    session_user_id: NotRequired[str]
     status: NotRequired[AgentStatus]
     error: NotRequired[str | None]
     error_type: NotRequired[ErrorType | None]
@@ -64,3 +71,13 @@ class AgentState(TypedDict):
     subagent_calls: NotRequired[
         Annotated[list[SubagentCallRecord], operator.add]
     ]
+    draft_answer: NotRequired[str | None]
+    critic_decision: NotRequired[dict[str, object] | None]
+    critic_status: NotRequired[CriticStatus]
+    critic_error: NotRequired[str | None]
+    revision_count: NotRequired[int]
+    max_revisions: NotRequired[int]
+    revised_answer: NotRequired[str | None]
+    revision_error: NotRequired[str | None]
+    final_answer: NotRequired[str | None]
+    unresolved_critic_issues: NotRequired[list[str]]

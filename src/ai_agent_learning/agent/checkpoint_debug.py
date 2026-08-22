@@ -107,6 +107,25 @@ def show_state_history(graph, thread_id: str):
                 f"{latest_call.get('agent_name', '<无>')} / "
                 f"{latest_call.get('status', '<无>')}"
             )
+        critic_decision = values.get("critic_decision") or {}
+        print(
+            "  critic_status: "
+            f"{values.get('critic_status', '<无>')}"
+        )
+        print(
+            "  critic_verdict: "
+            f"{critic_decision.get('verdict', '<无>')}"
+        )
+        print(
+            "  critic_severity: "
+            f"{critic_decision.get('severity', '<无>')}"
+        )
+        print(
+            "  revision_count: "
+            f"{values.get('revision_count', '<无>')}"
+        )
+        unresolved = values.get("unresolved_critic_issues", [])
+        print(f"  unresolved_critic_issue_count: {len(unresolved)}")
         print(f"  消息数量: {len(messages)}")
         if last_message is None:
             print("  最后一条消息: <无>")

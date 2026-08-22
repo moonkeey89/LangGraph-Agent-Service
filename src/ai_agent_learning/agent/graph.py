@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal, Protocol
 
 from langchain_core.messages import AIMessage
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -32,6 +32,12 @@ from ai_agent_learning.agent.state import AgentState
 logger = logging.getLogger(__name__)
 
 
+class PostAnswerWorkflow(Protocol):
+    """Optional nodes inserted between a normal Agent answer and memory."""
+
+    def attach(self, graph: Any, *, final_target: str) -> str: ...
+
+
 def route_after_agent(
     state: AgentState,
 ) -> Literal["tools", "memory_manager"]:
@@ -51,6 +57,7 @@ def build_graph(
     memory_manager_llm: BaseChatModel | None = None,
     memory_confidence_threshold: float = DEFAULT_MEMORY_CONFIDENCE_THRESHOLD,
     agent_system_prompt: str | None = None,
+    post_answer_workflow: PostAnswerWorkflow | None = None,
 ):
     agent = AgentNode(
         llm,
@@ -75,12 +82,18 @@ def build_graph(
     graph.add_node("failure", build_failure_response)
     graph.add_node("memory_manager", memory_manager.run)
     graph.add_node("memory_executor", memory_executor.run)
+    answer_target = "memory_manager"
+    if post_answer_workflow is not None:
+        answer_target = post_answer_workflow.attach(
+            graph,
+            final_target="memory_manager",
+        )
     graph.set_entry_point("memory_recall")
     graph.add_edge("memory_recall", "agent")
     graph.add_conditional_edges(
         "agent",
         route_after_agent,
-        {"tools": "tools", "memory_manager": "memory_manager"},
+        {"tools": "tools", "memory_manager": answer_target},
     )
     graph.add_conditional_edges(
         "tools",

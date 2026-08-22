@@ -10,6 +10,7 @@ from ai_agent_learning.agent.memory_manager import (
     DEFAULT_MEMORY_CONFIDENCE_THRESHOLD,
 )
 from ai_agent_learning.agents.math_agent import create_math_agent
+from ai_agent_learning.agents.critic import CriticWorkflow
 from ai_agent_learning.agents.subagent_tools import (
     DEFAULT_MAX_SUBAGENT_CALLS,
     SubagentInvoker,
@@ -53,6 +54,8 @@ def build_supervisor_graph(
     max_subagent_calls: int = DEFAULT_MAX_SUBAGENT_CALLS,
     travel_agent: SubagentInvoker | None = None,
     math_agent: SubagentInvoker | None = None,
+    critic_llm: BaseChatModel | None = None,
+    revision_llm: BaseChatModel | None = None,
 ):
     """Compile the checkpointed Supervisor around two stateless specialists."""
     travel = travel_agent or create_travel_agent(llm)
@@ -63,6 +66,10 @@ def build_supervisor_graph(
         max_subagent_calls=max_subagent_calls,
     )
     supervisor_tools = [*handoff_tools, *SUPERVISOR_MEMORY_TOOLS]
+    critic_workflow = CriticWorkflow(
+        critic_llm or llm,
+        revision_llm or llm,
+    )
     return build_graph(
         llm,
         supervisor_tools,
@@ -71,4 +78,5 @@ def build_supervisor_graph(
         memory_manager_llm=memory_manager_llm,
         memory_confidence_threshold=memory_confidence_threshold,
         agent_system_prompt=SUPERVISOR_PROMPT,
+        post_answer_workflow=critic_workflow,
     )

@@ -41,12 +41,18 @@ LangGraph → Memory Recall → AgentNode ↔ ToolNode → LangChain Tool → Sk
                          │      └─ Math ReAct → calculate
                          └─ 直接回答
                                   ↓
-                         Supervisor统一最终回答
+                         Supervisor回答草稿
                                   ↓
+                         Critic结构化审查
+                          ├─ PASS → Finalize
+                          └─ REVISE → 最多修订一次 → Finalize
+                                                   ↓
                          Memory Manager（每轮一次）→ END
 ```
 
 Supervisor 的主 State 和高层 handoff 记录继续由 `thread_id` Checkpoint；两个 Subagent 每次只接收一个最小任务字符串，无 Checkpointer、无长期记忆、无独立 `thread_id`。它们只返回结构化结果摘要，内部 ToolMessage 不进入主会话。
+
+Critic 不绑定任何 Tool，只接收当前用户请求、Supervisor 草稿、当前轮 Subagent 最终摘要和直接约束。草稿不会直接留在用户会话消息中；PASS 时原草稿进入 Finalize，REVISE 时由无工具 RevisionNode 最多修改一次。Critic 或修订模型失败时安全回退到原草稿。Critic 内部 JSON 和提示不会写入 `messages`，Memory Manager 只在 Finalize 后执行一次。
 
 ## 环境要求
 
@@ -95,6 +101,26 @@ DEEPSEEK_API_KEY=your-real-key
 ```powershell
 ai-agent-learning-multi
 ```
+
+启动非流式 FastAPI 服务（服务默认复用 Supervisor + Subagents + Critic 主图）：
+
+```powershell
+.venv\Scripts\python -m uvicorn ai_agent_learning.api.app:app --host 127.0.0.1 --port 8000
+```
+
+FastAPI lifespan 在进程启动时只创建一次 LLM、编译后的 LangGraph、SQLite
+Checkpointer 和长期记忆 Store，在关闭时释放两个 SQLite 连接。HTTP 接口为：
+
+```text
+GET  /health
+POST /api/v1/agent/invoke
+POST /api/v1/agent/resume
+```
+
+`X-User-ID` 是必填可信请求头；`thread_id` 在 JSON 请求体中。首次 API 调用会把
+两者的归属写入 Checkpoint，后续请求无法使用另一个用户接管同一个 thread。
+已有但不含该归属字段的旧 CLI thread 不会被 API 自动认领，请为 API 使用新的
+`thread_id`。CLI 的原有入口和数据库行为不受影响。
 
 程序启动后依次输入用户 ID 和会话 ID；直接回车分别使用 `default_user` 和 `default`。`thread_id` 定位 Checkpoint 会话，`user_id` 定位跨会话长期记忆。同一用户更换 thread 后不会自动继承旧消息，但仍可检索自己已保存且有效的长期事实。输入 `exit` 或 `quit` 退出。
 
@@ -167,8 +193,8 @@ exit      保留失败复核状态并退出；下次使用相同 thread_id 恢�
 .venv\Scripts\python -m unittest discover -s tests -t . -v
 ```
 
-默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、Memory Manager 四种决定、安全策略、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复及原有工具调用循环。
-多 Agent 测试还覆盖旅游/计算单领域路由、跨领域串行协作、能力隔离、普通问题直答、部分失败整合、重复 handoff 熔断、最大调用次数以及 Supervisor 主会话的 SQLite 恢复。
+默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、Memory Manager 四种决定、安全策略、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复、FastAPI invoke/resume 及原有工具调用循环。
+多 Agent 测试还覆盖旅游/计算单领域路由、跨领域串行协作、能力隔离、普通问题直答、部分失败整合、重复 handoff 熔断、最大调用次数以及 Supervisor 主会话的 SQLite 恢复。Critic 测试覆盖 PASS、遗漏修订、矛盾修订、单次修订上限、结构化输出失败降级、上下文最小化以及 Memory Manager 执行顺序。
 
 ## 项目结构
 
@@ -183,7 +209,8 @@ src/ai_agent_learning/
 ├── embeddings.py       # 本地多语言 Embedding 创建
 ├── logging_config.py   # 标准日志初始化
 ├── agent/              # State、AgentNode、Memory Manager、Graph、错误恢复与 Time Travel
-├── agents/             # Supervisor、Travel/Math Subagent 与高层 handoff Tools
+├── agents/             # Supervisor、Travel/Math、Critic 与高层 handoff Tools
+├── api/                # FastAPI lifespan、路由、DTO、依赖与 AgentService
 ├── tools/              # LangChain Tool 适配层
 └── skills/             # 业务能力
 
@@ -200,10 +227,10 @@ data/                   # 本地 Checkpoint 目录（数据库文件不提交 Gi
 
 ## 当前范围
 
-当前项目覆盖基础 LangGraph ReAct Agent、SQLite 持久化短期会话、长期记忆与最小 Supervisor/Subagents 协作，暂未实现：
+当前项目覆盖基础 LangGraph ReAct Agent、SQLite 持久化短期会话、长期记忆、最小 Supervisor/Subagents 协作、单次 Critic 审查与 FastAPI 非流式接口，暂未实现：
 
 - 复杂自动事实拆分与冲突合并
 - RAG
-- FastAPI
-- 并行 Subagent、Critic/Writer Agent 或群聊
+- SSE、WebSocket 或前端
+- 并行 Subagent、多轮反思、多个 Critic、Writer Agent 或群聊
 - 部署与容器化

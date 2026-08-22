@@ -1,4 +1,5 @@
 from ai_agent_learning.agents.math_agent import create_math_agent
+from ai_agent_learning.agents.critic import CriticDecision
 from ai_agent_learning.agents.subagent import (
     StatelessReActSubagent,
     SubagentResult,
@@ -10,6 +11,7 @@ from ai_agent_learning.agents.travel_agent import create_travel_agent
 __all__ = [
     "StatelessReActSubagent",
     "SubagentResult",
+    "CriticDecision",
     "build_supervisor_graph",
     "create_math_agent",
     "create_travel_agent",

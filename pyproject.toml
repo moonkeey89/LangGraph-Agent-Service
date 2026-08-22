@@ -9,6 +9,7 @@ description = "A teaching project for building a LangGraph ReAct agent."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.141,<1",
     "langchain-core>=1.5,<2",
     "langchain-openai>=1.5,<2",
     "langgraph>=1.2,<2",
@@ -16,6 +17,7 @@ dependencies = [
     "pydantic>=2.13,<3",
     "pydantic-settings>=2.15,<3",
     "model2vec>=0.8,<1",
+    "uvicorn>=0.51,<1",
 ]
 
 [project.scripts]

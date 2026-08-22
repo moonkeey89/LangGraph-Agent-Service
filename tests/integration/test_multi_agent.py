@@ -6,7 +6,11 @@ from tempfile import TemporaryDirectory
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from ai_agent_learning.agent import AgentContext
-from ai_agent_learning.agents import SubagentResult, build_supervisor_graph
+from ai_agent_learning.agents import (
+    CriticDecision,
+    SubagentResult,
+    build_supervisor_graph,
+)
 from ai_agent_learning.checkpoint import open_sqlite_checkpointer
 
 
@@ -15,8 +19,13 @@ def _tool_names(tools) -> frozenset[str]:
 
 
 class RoleAwareBoundModel:
-    def __init__(self, tool_names: frozenset[str]):
+    def __init__(
+        self,
+        tool_names: frozenset[str],
+        draft_mode: str = "complete",
+    ):
         self.tool_names = tool_names
+        self.draft_mode = draft_mode
 
     def invoke(self, messages):
         if "ask_travel_agent" in self.tool_names:
@@ -75,6 +84,16 @@ class RoleAwareBoundModel:
             )
         if handoffs:
             summaries = [json.loads(message.content) for message in handoffs]
+            if self.draft_mode == "omit_budget":
+                summaries = [
+                    item
+                    for item in summaries
+                    if item.get("agent_name") != "math_agent"
+                ]
+            if self.draft_mode == "contradict_budget":
+                return AIMessage(
+                    content="Supervisor整合：旅游信息完整；3天总预算为999元。"
+                )
             return AIMessage(
                 content="Supervisor整合："
                 + "；".join(
@@ -141,9 +160,29 @@ class RoleAwareBoundModel:
         return AIMessage(content=f"表达式500*3，结果{tool_message.content}。")
 
 
+class PassingCriticModel:
+    def invoke(self, _messages):
+        return CriticDecision(
+            verdict="PASS",
+            issues=[],
+            suggestions=[],
+            severity="none",
+            reason="草稿完整",
+        )
+
+
 class RoleAwareModel:
+    def __init__(self, draft_mode: str = "complete"):
+        self.draft_mode = draft_mode
+
     def bind_tools(self, tools):
-        return RoleAwareBoundModel(_tool_names(tools))
+        return RoleAwareBoundModel(
+            _tool_names(tools),
+            draft_mode=self.draft_mode,
+        )
+
+    def with_structured_output(self, _schema, method=None):
+        return PassingCriticModel()
 
 
 class StubSubagent:
