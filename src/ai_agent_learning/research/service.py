@@ -9,12 +9,15 @@ from ai_agent_learning.knowledge.models import KnowledgeChunk
 from ai_agent_learning.knowledge.service import KnowledgeServiceError
 from ai_agent_learning.research.catalog import ResearchCatalog
 from ai_agent_learning.research.models import (
+    AGENT_RUN_STATUSES,
     RESEARCH_ARTIFACT_CREATORS,
     RESEARCH_ARTIFACT_STATUSES,
     RESEARCH_ARTIFACT_TYPES,
     RESEARCH_PROJECT_STATUSES,
     RESEARCH_TASK_TYPES,
     ArtifactSource,
+    AgentRun,
+    AgentRunStatus,
     ResearchArtifact,
     ResearchArtifactCreator,
     ResearchArtifactStatus,
@@ -29,6 +32,11 @@ from ai_agent_learning.research.task_state import (
     InvalidTaskTransitionError,
     InvalidTaskTransitionInputError,
     transition_task_state,
+)
+from ai_agent_learning.research.run_state import (
+    InvalidAgentRunTransitionError,
+    InvalidAgentRunTransitionInputError,
+    transition_agent_run,
 )
 
 
@@ -125,6 +133,24 @@ class ResearchArtifactConflictError(ResearchServiceError):
 
 
 class ResearchArtifactValidationError(ResearchServiceError):
+    status_code = 422
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.public_message = message
+
+
+class AgentRunNotFoundError(ResearchServiceError):
+    status_code = 404
+    public_message = "Agent run resource was not found"
+
+
+class AgentRunConflictError(ResearchServiceError):
+    status_code = 409
+    public_message = "Agent run operation conflicts with current state"
+
+
+class AgentRunValidationError(ResearchServiceError):
     status_code = 422
 
     def __init__(self, message: str):
@@ -292,7 +318,9 @@ class ResearchService:
         try:
             if self.catalog.has_tasks(
                 normalized_project_id
-            ) or self.catalog.has_artifacts(normalized_project_id):
+            ) or self.catalog.has_artifacts(
+                normalized_project_id
+            ) or self.catalog.has_runs(normalized_project_id):
                 raise ResearchProjectConflictError
             deleted = self.catalog.delete(normalized_project_id, owner)
         except ResearchProjectConflictError:
@@ -464,6 +492,9 @@ class ResearchService:
             raise ResearchTaskConflictError
         try:
             if self.catalog.has_task_artifacts(
+                normalized_project_id,
+                normalized_task_id,
+            ) or self.catalog.has_task_runs(
                 normalized_project_id,
                 normalized_task_id,
             ):
@@ -681,7 +712,10 @@ class ResearchService:
             normalized_project_id,
             normalized_artifact_id,
         )
-        if artifact.status != "draft":
+        if artifact.status != "draft" or self.catalog.has_artifact_runs(
+            normalized_project_id,
+            normalized_artifact_id,
+        ):
             raise ResearchArtifactConflictError
         try:
             deleted = self.catalog.delete_artifact(
@@ -693,6 +727,131 @@ class ResearchService:
             raise ResearchPersistenceError from error
         if not deleted:
             raise ResearchArtifactNotFoundError
+
+    def create_run(
+        self,
+        project_id: str,
+        task_id: str,
+        owner_user_id: str,
+    ) -> AgentRun:
+        """Create metadata for one trusted execution attempt; no Graph is run."""
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        self._ensure_project_runs_mutable(project)
+        normalized_task_id = _task_id(task_id)
+        self._get_task(normalized_project_id, normalized_task_id)
+        try:
+            return self.catalog.create_run(
+                run_id=f"run_{uuid4().hex}",
+                task_id=normalized_task_id,
+                thread_id=f"research-run-{uuid4().hex}",
+                timestamp=_now(),
+            )
+        except sqlite3.IntegrityError as error:
+            raise AgentRunConflictError from error
+        except sqlite3.Error as error:
+            logger.exception("Agent run creation failed")
+            raise ResearchPersistenceError from error
+
+    def list_runs(
+        self,
+        project_id: str,
+        task_id: str,
+        owner_user_id: str,
+    ) -> list[AgentRun]:
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        self._get_owned(normalized_project_id, owner)
+        normalized_task_id = _task_id(task_id)
+        self._get_task(normalized_project_id, normalized_task_id)
+        try:
+            return self.catalog.list_runs(normalized_task_id)
+        except sqlite3.Error as error:
+            logger.exception("Agent run listing failed")
+            raise ResearchPersistenceError from error
+
+    def get_run(
+        self,
+        project_id: str,
+        task_id: str,
+        run_id: str,
+        owner_user_id: str,
+    ) -> AgentRun:
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        self._get_owned(normalized_project_id, owner)
+        normalized_task_id = _task_id(task_id)
+        self._get_task(normalized_project_id, normalized_task_id)
+        return self._get_run(normalized_task_id, _run_id(run_id))
+
+    def transition_run(
+        self,
+        project_id: str,
+        task_id: str,
+        run_id: str,
+        owner_user_id: str,
+        *,
+        target_status: AgentRunStatus,
+        error_message: str | None = None,
+    ) -> AgentRun:
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        self._ensure_project_runs_mutable(project)
+        normalized_task_id = _task_id(task_id)
+        self._get_task(normalized_project_id, normalized_task_id)
+        current = self._get_run(normalized_task_id, _run_id(run_id))
+        try:
+            transitioned = transition_agent_run(
+                current,
+                _run_status(target_status),
+                error_message=error_message,
+            )
+        except InvalidAgentRunTransitionError as error:
+            raise AgentRunConflictError from error
+        except InvalidAgentRunTransitionInputError as error:
+            raise AgentRunValidationError(str(error)) from error
+        return self._save_run(transitioned)
+
+    def attach_final_artifact(
+        self,
+        project_id: str,
+        task_id: str,
+        run_id: str,
+        artifact_id: str,
+        owner_user_id: str,
+    ) -> AgentRun:
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        self._ensure_project_runs_mutable(project)
+        normalized_task_id = _task_id(task_id)
+        self._get_task(normalized_project_id, normalized_task_id)
+        current = self._get_run(normalized_task_id, _run_id(run_id))
+        normalized_artifact_id = _artifact_id(artifact_id)
+        artifact = self._get_artifact(
+            normalized_project_id,
+            normalized_artifact_id,
+        )
+        if artifact.status != "final" or artifact.task_id not in {
+            None,
+            normalized_task_id,
+        }:
+            raise AgentRunConflictError
+        if current.final_artifact_id == normalized_artifact_id:
+            return current
+        if current.final_artifact_id is not None:
+            raise AgentRunConflictError
+        if current.status in {"completed", "failed", "cancelled"}:
+            raise AgentRunConflictError
+        return self._save_run(
+            replace(
+                current,
+                final_artifact_id=normalized_artifact_id,
+                updated_at=_now(),
+            )
+        )
 
     def _get_owned(self, project_id: str, owner_user_id: str) -> ResearchProject:
         try:
@@ -771,6 +930,27 @@ class ResearchService:
             logger.exception("Research artifact update failed")
             raise ResearchPersistenceError from error
 
+    def _get_run(self, task_id: str, run_id: str) -> AgentRun:
+        try:
+            run = self.catalog.get_run(task_id, run_id)
+        except sqlite3.Error as error:
+            logger.exception("Agent run lookup failed")
+            raise ResearchPersistenceError from error
+        if run is None:
+            raise AgentRunNotFoundError
+        return run
+
+    def _save_run(self, run: AgentRun) -> AgentRun:
+        try:
+            return self.catalog.update_run(run)
+        except KeyError as error:
+            raise AgentRunNotFoundError from error
+        except sqlite3.IntegrityError as error:
+            raise AgentRunConflictError from error
+        except sqlite3.Error as error:
+            logger.exception("Agent run update failed")
+            raise ResearchPersistenceError from error
+
     def _artifact_task_id(
         self,
         project_id: str,
@@ -829,6 +1009,11 @@ class ResearchService:
     def _ensure_project_artifacts_mutable(project: ResearchProject) -> None:
         if project.status == "archived":
             raise ResearchArtifactConflictError
+
+    @staticmethod
+    def _ensure_project_runs_mutable(project: ResearchProject) -> None:
+        if project.status == "archived":
+            raise AgentRunConflictError
 
     @staticmethod
     def _owner(owner_user_id: str) -> str:
@@ -1021,6 +1206,21 @@ def _source_chunk_ids(values: list[str]) -> list[str]:
             normalized.append(chunk_id)
             seen.add(chunk_id)
     return normalized
+
+
+def _run_id(run_id: str) -> str:
+    normalized = run_id.strip()
+    if not normalized:
+        raise AgentRunNotFoundError
+    return normalized
+
+
+def _run_status(value: str) -> AgentRunStatus:
+    if value not in AGENT_RUN_STATUSES:
+        raise AgentRunValidationError(
+            "status 只能是 pending、running、interrupted、completed、failed 或 cancelled"
+        )
+    return cast(AgentRunStatus, value)
 
 
 def _now() -> str:

@@ -5,6 +5,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ai_agent_learning.api.dependencies import get_research_service, get_user_id
 from ai_agent_learning.api.models import (
+    AgentRunResponse,
     ArtifactStatus,
     ArtifactType,
     CreateResearchArtifactRequest,
@@ -20,6 +21,7 @@ from ai_agent_learning.api.models import (
     UpdateResearchTaskRequest,
 )
 from ai_agent_learning.research.models import (
+    AgentRun,
     ResearchArtifact,
     ResearchProject,
     ResearchTask,
@@ -46,6 +48,9 @@ ARTIFACT_BUSINESS_RESPONSES = {
     409: {"model": ErrorResponse, "description": "Artifact state conflict"},
     422: {"model": ErrorResponse, "description": "Request or business validation failed"},
 }
+RUN_BUSINESS_RESPONSES = {
+    404: {"model": ErrorResponse, "description": "Project, task, or run not found"},
+}
 
 
 def _response(project: ResearchProject) -> ResearchProjectResponse:
@@ -58,6 +63,10 @@ def _task_response(task: ResearchTask) -> ResearchTaskResponse:
 
 def _artifact_response(artifact: ResearchArtifact) -> ResearchArtifactResponse:
     return ResearchArtifactResponse.model_validate(artifact)
+
+
+def _run_response(run: AgentRun) -> AgentRunResponse:
+    return AgentRunResponse.model_validate(run)
 
 
 @router.post(
@@ -392,3 +401,45 @@ async def delete_research_artifact(
         user_id,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/{project_id}/tasks/{task_id}/runs",
+    response_model=list[AgentRunResponse],
+    responses=RUN_BUSINESS_RESPONSES,
+)
+async def list_agent_runs(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    task_id: Annotated[str, Path(min_length=1, max_length=128)],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ResearchService, Depends(get_research_service)],
+) -> list[AgentRunResponse]:
+    runs = await run_in_threadpool(
+        service.list_runs,
+        project_id,
+        task_id,
+        user_id,
+    )
+    return [_run_response(run) for run in runs]
+
+
+@router.get(
+    "/{project_id}/tasks/{task_id}/runs/{run_id}",
+    response_model=AgentRunResponse,
+    responses=RUN_BUSINESS_RESPONSES,
+)
+async def get_agent_run(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    task_id: Annotated[str, Path(min_length=1, max_length=128)],
+    run_id: Annotated[str, Path(min_length=1, max_length=128)],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ResearchService, Depends(get_research_service)],
+) -> AgentRunResponse:
+    run = await run_in_threadpool(
+        service.get_run,
+        project_id,
+        task_id,
+        run_id,
+        user_id,
+    )
+    return _run_response(run)

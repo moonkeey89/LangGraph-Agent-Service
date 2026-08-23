@@ -495,3 +495,29 @@ class ResearchArtifactResponse(BaseModel):
     finalized_at: str | None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+AgentRunStatusValue = Literal[
+    "pending",
+    "running",
+    "interrupted",
+    "completed",
+    "failed",
+    "cancelled",
+]
+
+
+class AgentRunResponse(BaseModel):
+    run_id: str
+    task_id: str
+    thread_id: str
+    attempt_number: int
+    status: AgentRunStatusValue
+    final_artifact_id: str | None
+    error_message: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)

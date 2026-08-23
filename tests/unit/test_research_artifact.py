@@ -104,7 +104,7 @@ class ResearchArtifactMigrationTests(unittest.TestCase):
                         "SELECT name FROM sqlite_master WHERE type='table'"
                     )
                 }
-                self.assertEqual(versions, [1, 2, CURRENT_SCHEMA_VERSION])
+                self.assertEqual(versions, [1, 2, 3, CURRENT_SCHEMA_VERSION])
                 self.assertIn("research_artifacts", tables)
                 self.assertEqual(catalog.get_by_id(project_id).name, "已有项目")
                 self.assertEqual(catalog.get_task(project_id, task_id).title, "已有任务")
@@ -116,7 +116,7 @@ class ResearchArtifactMigrationTests(unittest.TestCase):
                 count = restarted.connection.execute(
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
-                self.assertEqual(count, 3)
+                self.assertEqual(count, 4)
                 self.assertEqual(
                     restarted.connection.execute("PRAGMA foreign_keys").fetchone()[0],
                     1,

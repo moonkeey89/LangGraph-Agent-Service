@@ -5,7 +5,18 @@ from ai_agent_learning.research.catalog import (
     open_research_catalog,
     resolve_researchflow_path,
 )
+from ai_agent_learning.research.graph import build_research_graph
+from ai_agent_learning.research.graph_state import (
+    ResearchContext,
+    ResearchEvidence,
+    ResearchOutcome,
+    ResearchRoute,
+    ResearchSource,
+    ResearchState,
+)
 from ai_agent_learning.research.models import (
+    AgentRun,
+    AgentRunStatus,
     ArtifactSource,
     ResearchArtifact,
     ResearchArtifactCreator,
@@ -18,6 +29,9 @@ from ai_agent_learning.research.models import (
     ResearchTaskType,
 )
 from ai_agent_learning.research.service import (
+    AgentRunConflictError,
+    AgentRunNotFoundError,
+    AgentRunValidationError,
     ResearchArtifactConflictError,
     ResearchArtifactNotFoundError,
     ResearchArtifactSourceNotFoundError,
@@ -33,13 +47,29 @@ from ai_agent_learning.research.service import (
     ResearchTaskNotFoundError,
     ResearchTaskValidationError,
 )
+from ai_agent_learning.research.workflow import (
+    ResearchAnalysisAgent,
+    ResearchCritic,
+    ResearchCriticDecision,
+    ResearchEvidenceAgent,
+    ResearchRevision,
+    ResearchRouteDecision,
+    ResearchSupervisor,
+    ResearchSynthesizer,
+)
 
 
 __all__ = [
     "ArtifactSource",
+    "AgentRun",
+    "AgentRunConflictError",
+    "AgentRunNotFoundError",
+    "AgentRunStatus",
+    "AgentRunValidationError",
     "CURRENT_SCHEMA_VERSION",
     "RESEARCHFLOW_DB_PATH",
     "ResearchCatalog",
+    "ResearchAnalysisAgent",
     "ResearchArtifact",
     "ResearchArtifactConflictError",
     "ResearchArtifactCreator",
@@ -48,6 +78,11 @@ __all__ = [
     "ResearchArtifactStatus",
     "ResearchArtifactType",
     "ResearchArtifactValidationError",
+    "ResearchContext",
+    "ResearchCritic",
+    "ResearchCriticDecision",
+    "ResearchEvidence",
+    "ResearchEvidenceAgent",
     "ResearchKnowledgeBaseNotFoundError",
     "ResearchPersistenceError",
     "ResearchProject",
@@ -55,14 +90,23 @@ __all__ = [
     "ResearchProjectNotFoundError",
     "ResearchProjectStatus",
     "ResearchProjectValidationError",
+    "ResearchOutcome",
+    "ResearchRevision",
+    "ResearchRoute",
+    "ResearchRouteDecision",
     "ResearchService",
     "ResearchServiceError",
+    "ResearchSource",
+    "ResearchState",
+    "ResearchSupervisor",
+    "ResearchSynthesizer",
     "ResearchTask",
     "ResearchTaskConflictError",
     "ResearchTaskNotFoundError",
     "ResearchTaskStatus",
     "ResearchTaskType",
     "ResearchTaskValidationError",
+    "build_research_graph",
     "open_research_catalog",
     "resolve_researchflow_path",
 ]

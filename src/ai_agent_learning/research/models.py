@@ -37,6 +37,17 @@ ResearchArtifactStatus = Literal["draft", "final"]
 RESEARCH_ARTIFACT_STATUSES = frozenset({"draft", "final"})
 ResearchArtifactCreator = Literal["user", "agent"]
 RESEARCH_ARTIFACT_CREATORS = frozenset({"user", "agent"})
+AgentRunStatus = Literal[
+    "pending",
+    "running",
+    "interrupted",
+    "completed",
+    "failed",
+    "cancelled",
+]
+AGENT_RUN_STATUSES = frozenset(
+    {"pending", "running", "interrupted", "completed", "failed", "cancelled"}
+)
 
 
 @dataclass(frozen=True)
@@ -101,3 +112,20 @@ class ResearchArtifact:
     created_at: str
     updated_at: str
     finalized_at: str | None
+
+
+@dataclass(frozen=True)
+class AgentRun:
+    """Durable metadata for one execution attempt of a research task."""
+
+    run_id: str
+    task_id: str
+    thread_id: str
+    attempt_number: int
+    status: AgentRunStatus
+    final_artifact_id: str | None
+    error_message: str | None
+    created_at: str
+    started_at: str | None
+    finished_at: str | None
+    updated_at: str

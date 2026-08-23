@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import RLock
 
 from ai_agent_learning.research.models import (
+    AgentRun,
     ArtifactSource,
     ResearchArtifact,
     ResearchProject,
@@ -16,7 +17,7 @@ from ai_agent_learning.research.models import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RESEARCHFLOW_DB_PATH = PROJECT_ROOT / "data" / "researchflow.sqlite"
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def resolve_researchflow_path(path: Path) -> Path:
@@ -186,6 +187,51 @@ class ResearchCatalog:
                     """,
                     (3, _now()),
                 )
+            if 4 not in applied_versions:
+                self.connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_runs (
+                        run_id TEXT PRIMARY KEY,
+                        task_id TEXT NOT NULL,
+                        thread_id TEXT NOT NULL UNIQUE,
+                        attempt_number INTEGER NOT NULL CHECK (
+                            attempt_number >= 1
+                        ),
+                        status TEXT NOT NULL CHECK (
+                            status IN (
+                                'pending', 'running', 'interrupted',
+                                'completed', 'failed', 'cancelled'
+                            )
+                        ),
+                        final_artifact_id TEXT,
+                        error_message TEXT,
+                        created_at TEXT NOT NULL,
+                        started_at TEXT,
+                        finished_at TEXT,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE (task_id, attempt_number),
+                        FOREIGN KEY (task_id)
+                            REFERENCES research_tasks(task_id)
+                            ON DELETE RESTRICT,
+                        FOREIGN KEY (final_artifact_id)
+                            REFERENCES research_artifacts(artifact_id)
+                            ON DELETE RESTRICT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_agent_runs_task_updated
+                        ON agent_runs(task_id, updated_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_agent_runs_status_updated
+                        ON agent_runs(status, updated_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_agent_runs_final_artifact
+                        ON agent_runs(final_artifact_id);
+                    """
+                )
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+                    VALUES (?, ?)
+                    """,
+                    (4, _now()),
+                )
 
     def create(self, project: ResearchProject) -> ResearchProject:
         with self._lock, self.connection:
@@ -296,6 +342,43 @@ class ResearchCatalog:
                 WHERE project_id = ? AND task_id = ? LIMIT 1
                 """,
                 (project_id, task_id),
+            ).fetchone()
+        return row is not None
+
+    def has_runs(self, project_id: str) -> bool:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT 1 FROM agent_runs AS runs
+                JOIN research_tasks AS tasks ON tasks.task_id = runs.task_id
+                WHERE tasks.project_id = ? LIMIT 1
+                """,
+                (project_id,),
+            ).fetchone()
+        return row is not None
+
+    def has_task_runs(self, project_id: str, task_id: str) -> bool:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT 1 FROM agent_runs AS runs
+                JOIN research_tasks AS tasks ON tasks.task_id = runs.task_id
+                WHERE tasks.project_id = ? AND runs.task_id = ? LIMIT 1
+                """,
+                (project_id, task_id),
+            ).fetchone()
+        return row is not None
+
+    def has_artifact_runs(self, project_id: str, artifact_id: str) -> bool:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT 1 FROM agent_runs AS runs
+                JOIN research_tasks AS tasks ON tasks.task_id = runs.task_id
+                WHERE tasks.project_id = ? AND runs.final_artifact_id = ?
+                LIMIT 1
+                """,
+                (project_id, artifact_id),
             ).fetchone()
         return row is not None
 
@@ -497,6 +580,98 @@ class ResearchCatalog:
             )
         return cursor.rowcount == 1
 
+    def create_run(
+        self,
+        *,
+        run_id: str,
+        task_id: str,
+        thread_id: str,
+        timestamp: str,
+    ) -> AgentRun:
+        """Atomically allocate the next per-task attempt and insert it."""
+        with self._lock:
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                row = self.connection.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt_number), 0) + 1 AS next_attempt
+                    FROM agent_runs WHERE task_id = ?
+                    """,
+                    (task_id,),
+                ).fetchone()
+                attempt_number = int(row["next_attempt"])
+                self.connection.execute(
+                    """
+                    INSERT INTO agent_runs (
+                        run_id, task_id, thread_id, attempt_number, status,
+                        final_artifact_id, error_message, created_at,
+                        started_at, finished_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, NULL, NULL, ?)
+                    """,
+                    (
+                        run_id,
+                        task_id,
+                        thread_id,
+                        attempt_number,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        result = self.get_run(task_id, run_id)
+        assert result is not None
+        return result
+
+    def list_runs(self, task_id: str) -> list[AgentRun]:
+        with self._lock:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE task_id = ?
+                ORDER BY attempt_number DESC
+                """,
+                (task_id,),
+            ).fetchall()
+        return [_run_from_row(row) for row in rows]
+
+    def get_run(self, task_id: str, run_id: str) -> AgentRun | None:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE task_id = ? AND run_id = ?
+                """,
+                (task_id, run_id),
+            ).fetchone()
+        return _run_from_row(row) if row is not None else None
+
+    def update_run(self, run: AgentRun) -> AgentRun:
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                """
+                UPDATE agent_runs SET
+                    status = ?, final_artifact_id = ?, error_message = ?,
+                    started_at = ?, finished_at = ?, updated_at = ?
+                WHERE run_id = ? AND task_id = ?
+                """,
+                (
+                    run.status,
+                    run.final_artifact_id,
+                    run.error_message,
+                    run.started_at,
+                    run.finished_at,
+                    run.updated_at,
+                    run.run_id,
+                    run.task_id,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise KeyError(run.run_id)
+        return run
+
 
 @contextmanager
 def open_research_catalog(path: Path) -> Iterator[ResearchCatalog]:
@@ -555,3 +730,7 @@ def _artifact_from_row(row: sqlite3.Row) -> ResearchArtifact:
         raise sqlite3.DataError("invalid artifact sources JSON") from error
     data["sources"] = sources
     return ResearchArtifact(**data)
+
+
+def _run_from_row(row: sqlite3.Row) -> AgentRun:
+    return AgentRun(**dict(row))

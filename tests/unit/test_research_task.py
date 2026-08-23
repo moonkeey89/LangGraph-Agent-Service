@@ -84,7 +84,7 @@ class ResearchTaskMigrationTests(unittest.TestCase):
                     ).fetchall()
                 ]
                 self.assertIn("research_tasks", tables)
-                self.assertEqual(versions, [1, 2, CURRENT_SCHEMA_VERSION])
+                self.assertEqual(versions, [1, 2, 3, CURRENT_SCHEMA_VERSION])
                 self.assertEqual(catalog.get_by_id(project_id).name, "已有项目")
             finally:
                 catalog.close()
@@ -109,7 +109,7 @@ class ResearchTaskMigrationTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
                 self.assertEqual(restored.title, "持久化任务")
-                self.assertEqual(count, 3)
+                self.assertEqual(count, 4)
             finally:
                 second.close()
 

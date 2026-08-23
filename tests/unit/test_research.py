@@ -46,7 +46,7 @@ class ResearchCatalogTests(unittest.TestCase):
                 self.assertIn("research_artifacts", tables)
                 self.assertEqual(
                     [row[0] for row in versions],
-                    [1, 2, CURRENT_SCHEMA_VERSION],
+                    [1, 2, 3, CURRENT_SCHEMA_VERSION],
                 )
             finally:
                 catalog.close()
@@ -70,7 +70,7 @@ class ResearchCatalogTests(unittest.TestCase):
                 ).fetchall()
                 self.assertIsNotNone(restored)
                 self.assertEqual(restored.name, "复现实验")
-                self.assertEqual(len(versions), 3)
+                self.assertEqual(len(versions), 4)
             finally:
                 second.close()
 
