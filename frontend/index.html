@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="AI Agent Learning 原生 JavaScript 教学聊天页面"
+    />
+    <title>AI Agent Learning</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell" aria-labelledby="page-title">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">LANGGRAPH TEACHING CLIENT</p>
+          <h1 id="page-title">AI Agent Learning</h1>
+          <p class="subtitle">Supervisor、Subagents、Critic 与 Memory 的最小聊天入口</p>
+        </div>
+        <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">
+          API 文档
+        </a>
+      </header>
+
+      <section class="session-panel" aria-label="会话信息">
+        <label class="field user-field">
+          <span>开发用户 ID</span>
+          <input
+            id="user-id"
+            type="text"
+            maxlength="128"
+            autocomplete="off"
+            value="moon"
+          />
+        </label>
+
+        <div class="thread-field">
+          <span>当前 thread_id</span>
+          <code id="thread-id"></code>
+        </div>
+
+        <button id="new-session" class="secondary-button" type="button">
+          新建会话
+        </button>
+
+        <p class="security-note">
+          X-User-ID 仅用于本地开发阶段的身份模拟，不是真实登录或认证。
+        </p>
+      </section>
+
+      <section class="chat-panel" aria-label="Agent 对话">
+        <div id="message-list" class="message-list" aria-live="polite"></div>
+
+        <form id="message-form" class="composer">
+          <label class="sr-only" for="message-input">输入消息</label>
+          <textarea
+            id="message-input"
+            rows="3"
+            maxlength="20000"
+            placeholder="输入问题。Enter 发送，Shift + Enter 换行。"
+            required
+          ></textarea>
+          <div class="composer-actions">
+            <div class="connection-status" aria-live="polite">
+              <span id="status-dot" class="status-dot"></span>
+              <span id="status-text">就绪</span>
+            </div>
+            <button id="stop-button" class="stop-button" type="button" disabled>
+              停止
+            </button>
+            <button id="send-button" class="primary-button" type="submit">
+              发送
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <footer>
+        停止按钮只会中断浏览器继续读取，不保证撤销服务器已经执行的工具或副作用。
+      </footer>
+    </main>
+
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>

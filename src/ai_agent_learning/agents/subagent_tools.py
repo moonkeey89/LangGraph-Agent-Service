@@ -227,6 +227,7 @@ def create_subagent_tools(
     travel_agent: SubagentInvoker,
     math_agent: SubagentInvoker,
     *,
+    knowledge_agent: SubagentInvoker | None = None,
     max_subagent_calls: int = DEFAULT_MAX_SUBAGENT_CALLS,
 ) -> list[BaseTool]:
     dispatcher = SubagentDispatcher(max_subagent_calls)
@@ -247,4 +248,16 @@ def create_subagent_tools(
         """委派数学、算术和预算计算任务；不能查询天气或旅游景点。"""
         return dispatcher.invoke(math_agent, task, runtime)
 
-    return [ask_travel_agent, ask_math_agent]
+    tools: list[BaseTool] = [ask_travel_agent, ask_math_agent]
+    if knowledge_agent is not None:
+
+        @tool
+        def ask_knowledge_agent(
+            task: str,
+            runtime: ToolRuntime[AgentContext, AgentState],
+        ) -> Command:
+            """委派私有文档知识库问题；不传身份、会话历史或知识库ID。"""
+            return dispatcher.invoke(knowledge_agent, task, runtime)
+
+        tools.append(ask_knowledge_agent)
+    return tools

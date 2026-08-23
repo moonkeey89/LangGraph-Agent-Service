@@ -1,9 +1,10 @@
+import json
 import unittest
 from contextlib import contextmanager
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 
 from ai_agent_learning.api.app import create_app
@@ -87,6 +88,31 @@ class StatefulFakeGraph:
             answer = str(state["facts"].get("name", "不知道"))
         elif message == "我主要使用什么语言？":
             answer = self.memories.get(user_id, "不知道")
+        elif message == "rag-source":
+            answer = "项目代号是ORBIT-731"
+            return {
+                "messages": [
+                    ToolMessage(
+                        content=json.dumps(
+                            {
+                                "sources": [
+                                    {
+                                        "source": "manual.md",
+                                        "page": 1,
+                                        "document_id": "doc-real",
+                                        "chunk_id": "chunk-real",
+                                        "score": 0.95,
+                                    }
+                                ]
+                            }
+                        ),
+                        name="ask_knowledge_agent",
+                        tool_call_id="rag-call",
+                    ),
+                    AIMessage(content=answer),
+                ],
+                "final_answer": answer,
+            }
         else:
             answer = f"回答：{message}"
         return {
@@ -142,6 +168,13 @@ class AgentApiTests(unittest.TestCase):
             json={},
         )
         self.assertEqual(response.status_code, 422)
+
+    def test_invoke_returns_structured_rag_sources(self):
+        response = self.invoke("rag-source", "api-rag")
+        body = response.json()
+        self.assertEqual(body["answer"], "项目代号是ORBIT-731")
+        self.assertEqual(body["sources"][0]["source"], "manual.md")
+        self.assertEqual(body["sources"][0]["chunk_id"], "chunk-real")
 
     def test_same_user_and_thread_continue_session(self):
         self.invoke("我的名字是小明", "api-session")

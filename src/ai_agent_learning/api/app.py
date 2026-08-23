@@ -6,6 +6,7 @@ from contextlib import AbstractContextManager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from ai_agent_learning.api.frontend import attach_frontend
 from ai_agent_learning.api.resources import open_agent_service
 from ai_agent_learning.api.routes import router
 from ai_agent_learning.api.service import AgentService, AgentServiceError
@@ -37,6 +38,7 @@ def create_app(
         lifespan=lifespan,
     )
     application.include_router(router)
+    attach_frontend(application)
 
     @application.exception_handler(AgentServiceError)
     async def handle_service_error(

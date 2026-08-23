@@ -24,6 +24,15 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.memory_embedding_dimensions, 256)
         self.assertEqual(settings.memory_manager_confidence_threshold, 0.75)
         self.assertEqual(settings.supervisor_max_subagent_calls, 4)
+        self.assertEqual(settings.knowledge_base_id, "demo")
+        self.assertEqual(
+            settings.knowledge_chroma_directory.as_posix(),
+            "data/knowledge_chroma",
+        )
+        self.assertEqual(settings.knowledge_chunk_size, 800)
+        self.assertEqual(settings.knowledge_chunk_overlap, 120)
+        self.assertEqual(settings.knowledge_top_k, 3)
+        self.assertEqual(settings.knowledge_relevance_threshold, 0.35)
         self.assertEqual(settings.log_level, "INFO")
         self.assertNotIn("test-secret-key", repr(settings))
 
@@ -37,6 +46,12 @@ class SettingsTests(unittest.TestCase):
             "MEMORY_EMBEDDING_DIMENSIONS": "128",
             "MEMORY_MANAGER_CONFIDENCE_THRESHOLD": "0.8",
             "SUPERVISOR_MAX_SUBAGENT_CALLS": "5",
+            "KNOWLEDGE_BASE_ID": "internal_docs",
+            "KNOWLEDGE_CHROMA_DIRECTORY": "custom/chroma",
+            "KNOWLEDGE_CHUNK_SIZE": "600",
+            "KNOWLEDGE_CHUNK_OVERLAP": "80",
+            "KNOWLEDGE_TOP_K": "4",
+            "KNOWLEDGE_RELEVANCE_THRESHOLD": "0.45",
             "LOG_LEVEL": "debug",
         }
 
@@ -54,6 +69,11 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.memory_embedding_dimensions, 128)
         self.assertEqual(settings.memory_manager_confidence_threshold, 0.8)
         self.assertEqual(settings.supervisor_max_subagent_calls, 5)
+        self.assertEqual(settings.knowledge_base_id, "internal_docs")
+        self.assertEqual(settings.knowledge_chunk_size, 600)
+        self.assertEqual(settings.knowledge_chunk_overlap, 80)
+        self.assertEqual(settings.knowledge_top_k, 4)
+        self.assertEqual(settings.knowledge_relevance_threshold, 0.45)
         self.assertEqual(settings.log_level, "DEBUG")
 
     def test_api_key_is_required(self):
@@ -92,6 +112,23 @@ class SettingsTests(unittest.TestCase):
                 deepseek_api_key="test-secret-key",
                 supervisor_max_subagent_calls=0,
             )
+
+    def test_knowledge_configuration_is_validated(self):
+        invalid_values = [
+            {"knowledge_base_id": "bad id"},
+            {"knowledge_chunk_size": 0},
+            {"knowledge_chunk_size": 100, "knowledge_chunk_overlap": 100},
+            {"knowledge_top_k": 0},
+            {"knowledge_relevance_threshold": 1.1},
+        ]
+        for values in invalid_values:
+            with self.subTest(values=values):
+                with self.assertRaises(ValidationError):
+                    Settings(
+                        _env_file=None,
+                        deepseek_api_key="test-secret-key",
+                        **values,
+                    )
 
 
 if __name__ == "__main__":

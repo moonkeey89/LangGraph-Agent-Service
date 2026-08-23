@@ -109,7 +109,7 @@ ai-agent-learning-multi
 ```
 
 FastAPI lifespan 在进程启动时只创建一次 LLM、编译后的 LangGraph、SQLite
-Checkpointer 和长期记忆 Store，在关闭时释放两个 SQLite 连接。HTTP 接口为：
+Checkpointer、长期记忆Store和RAG Chroma客户端，在关闭时释放相应连接。HTTP接口为：
 
 ```text
 GET  /health
@@ -145,6 +145,37 @@ started → progress* → error
 Finalize 确定答案后再发送。Critic、Memory Manager 和 Subagent 的模型片段不会对外
 输出；若模型集成未提供可验证的真实片段，则只返回进度和完整 `completed.answer`，
 不会用定时器伪造 token。流中出现 `interrupted` 后，仍使用原 `/resume` 接口恢复。
+
+浏览器聊天页可直接访问：
+
+```text
+http://127.0.0.1:8000/
+```
+
+页面使用原生 HTML、CSS 和 JavaScript，通过 `fetch()` 发送 POST SSE 请求，并从
+`response.body` 持续解析公开事件。它只在 `localStorage` 保存开发阶段的 user ID
+和 thread ID，不保存模型密钥、Checkpoint 或长期记忆。页面中的用户 ID 只是
+`X-User-ID` 的开发模拟，并不等于生产环境认证。
+
+首次使用RAG前，先离线索引项目自带的演示文档：
+
+```powershell
+.venv\Scripts\python -m ai_agent_learning.knowledge.cli `
+  examples\knowledge\demo_agent_handbook.md `
+  --knowledge-base-id demo
+```
+
+入库只在命令执行时解析和切分文档，用户提问时不会重新读取全部文件。默认数据写入
+`data/knowledge_chroma/`，该目录不会提交Git。随后重启FastAPI并在网页询问：
+
+```text
+根据内部手册，星河项目的内部代号是什么？
+```
+
+正确答案应包含演示文档中的唯一事实`ORBIT-731`，回答下方显示实际文件来源。当前
+Knowledge Agent使用Settings中的`KNOWLEDGE_BASE_ID=demo`，自然语言不能修改这个ID。
+同一文档再次入库会使用稳定document/chunk ID进行upsert，并删除该文档已失效的旧
+chunk；修改文档后直接重复同一命令即可完成重新索引。
 
 程序启动后依次输入用户 ID 和会话 ID；直接回车分别使用 `default_user` 和 `default`。`thread_id` 定位 Checkpoint 会话，`user_id` 定位跨会话长期记忆。同一用户更换 thread 后不会自动继承旧消息，但仍可检索自己已保存且有效的长期事实。输入 `exit` 或 `quit` 退出。
 
@@ -217,7 +248,7 @@ exit      保留失败复核状态并退出；下次使用相同 thread_id 恢�
 .venv\Scripts\python -m unittest discover -s tests -t . -v
 ```
 
-默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、Memory Manager 四种决定、安全策略、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复、FastAPI invoke/resume/SSE 及原有工具调用循环。
+默认测试使用 Fake/Mock LLM 和确定性测试 Embedding，不会请求 DeepSeek API，也不会下载真实模型。测试覆盖同会话恢复、不同会话隔离、跨 thread 长期记忆、跨用户隔离、跨进程恢复、Memory Manager 四种决定、安全策略、敏感信息拒绝、Memory CRUD、人工审批、Replay/Fork、错误恢复、FastAPI invoke/resume/SSE、RAG入库/检索/隔离/来源及原有工具调用循环。
 多 Agent 测试还覆盖旅游/计算单领域路由、跨领域串行协作、能力隔离、普通问题直答、部分失败整合、重复 handoff 熔断、最大调用次数以及 Supervisor 主会话的 SQLite 恢复。Critic 测试覆盖 PASS、遗漏修订、矛盾修订、单次修订上限、结构化输出失败降级、上下文最小化以及 Memory Manager 执行顺序。
 
 ## 项目结构
@@ -233,8 +264,9 @@ src/ai_agent_learning/
 ├── embeddings.py       # 本地多语言 Embedding 创建
 ├── logging_config.py   # 标准日志初始化
 ├── agent/              # State、AgentNode、Memory Manager、Graph、错误恢复与 Time Travel
-├── agents/             # Supervisor、Travel/Math、Critic 与高层 handoff Tools
+├── agents/             # Supervisor、Travel/Math/Knowledge、Critic与高层handoff Tools
 ├── api/                # FastAPI lifespan、路由、DTO、依赖与 AgentService
+├── knowledge/          # 文档Loader、切分、Chroma、Retriever与离线入库CLI
 ├── tools/              # LangChain Tool 适配层
 └── skills/             # 业务能力
 
@@ -245,16 +277,18 @@ tests/
 legacy/                 # 旧手写 Agent 学习代码
 docs/                   # 学习文档
 data/                   # 本地 Checkpoint 目录（数据库文件不提交 Git）
+frontend/               # 原生浏览器聊天页、样式和独立 SSE 解析器
+examples/knowledge/     # 不含敏感信息的RAG演示文档
 ```
 
 更完整的原理和学习路径参见 [docs/comprehension.md](docs/comprehension.md)。
 
 ## 当前范围
 
-当前项目覆盖基础 LangGraph ReAct Agent、SQLite 持久化短期会话、长期记忆、最小 Supervisor/Subagents 协作、单次 Critic 审查以及 FastAPI 非流式与 SSE 接口，暂未实现：
+当前项目覆盖基础 LangGraph ReAct Agent、SQLite 持久化短期会话、长期记忆、最小 Supervisor/Subagents 协作、单次 Critic 审查、本地Chroma RAG、FastAPI非流式与SSE接口，以及原生JavaScript教学聊天页，暂未实现：
 
 - 复杂自动事实拆分与冲突合并
-- RAG
-- WebSocket、聊天前端或 SSE 断线补发
+- OCR、联网搜索、混合检索、BM25、Query Rewrite、HyDE或Reranker
+- WebSocket、SSE 断线补发或完整会话历史页面
 - 并行 Subagent、多轮反思、多个 Critic、Writer Agent 或群聊
 - 部署与容器化

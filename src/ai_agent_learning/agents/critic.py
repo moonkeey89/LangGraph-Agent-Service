@@ -33,6 +33,8 @@ class CriticDecision(BaseModel):
 _CRITIC_PROMPT = """你是只读 Critic Agent，只负责审查 Supervisor 草稿。
 判断草稿是否完整覆盖用户请求、是否与Subagent摘要矛盾、是否遗漏明确约束。
 只能依据输入JSON；不得要求调用工具、不得虚构新事实、不得修改用户身份或记忆。
+如果存在Knowledge Agent结果，检查文档事实是否有对应sources、引用是否来自实际结果，
+以及草稿是否越过证据；不得自行添加新的来源。
 完整且一致时输出PASS；存在需要修改的问题时输出REVISE并给出具体issues和suggestions。"""
 
 _REVISION_PROMPT = """你是回答修订节点，不绑定任何工具。
@@ -70,7 +72,11 @@ def _subagent_summaries(state: AgentState, human_index: int) -> list[dict[str, o
     for message in state.get("messages", [])[human_index + 1 :]:
         if not isinstance(message, ToolMessage):
             continue
-        if message.name not in {"ask_travel_agent", "ask_math_agent"}:
+        if message.name not in {
+            "ask_travel_agent",
+            "ask_math_agent",
+            "ask_knowledge_agent",
+        }:
             continue
         try:
             payload = json.loads(str(message.content))
@@ -87,6 +93,7 @@ def _subagent_summaries(state: AgentState, human_index: int) -> list[dict[str, o
                     "result",
                     "error",
                     "retry_recommended",
+                    "sources",
                 )
             }
         )

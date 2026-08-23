@@ -1,5 +1,9 @@
+from pathlib import Path
+
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from ai_agent_learning.knowledge.models import validate_knowledge_base_id
 
 
 class Settings(BaseSettings):
@@ -11,6 +15,12 @@ class Settings(BaseSettings):
     memory_embedding_dimensions: int = 256
     memory_manager_confidence_threshold: float = 0.75
     supervisor_max_subagent_calls: int = 4
+    knowledge_base_id: str = "demo"
+    knowledge_chroma_directory: Path = Path("data/knowledge_chroma")
+    knowledge_chunk_size: int = 800
+    knowledge_chunk_overlap: int = 120
+    knowledge_top_k: int = 3
+    knowledge_relevance_threshold: float | None = 0.35
     log_level: str = "INFO"
 
     @field_validator("memory_embedding_dimensions")
@@ -33,6 +43,41 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("Supervisor 最大 Subagent 调用次数必须是正整数")
         return value
+
+    @field_validator("knowledge_base_id")
+    @classmethod
+    def validate_default_knowledge_base_id(cls, value: str) -> str:
+        return validate_knowledge_base_id(value)
+
+    @field_validator("knowledge_chunk_size", "knowledge_top_k")
+    @classmethod
+    def validate_positive_knowledge_integer(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("知识库chunk_size和top_k必须是正整数")
+        return value
+
+    @field_validator("knowledge_chunk_overlap")
+    @classmethod
+    def validate_knowledge_overlap(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("knowledge_chunk_overlap不能为负数")
+        return value
+
+    @field_validator("knowledge_relevance_threshold")
+    @classmethod
+    def validate_knowledge_threshold(
+        cls,
+        value: float | None,
+    ) -> float | None:
+        if value is not None and not 0.0 <= value <= 1.0:
+            raise ValueError("knowledge_relevance_threshold必须在0到1之间")
+        return value
+
+    def model_post_init(self, _context) -> None:
+        if self.knowledge_chunk_overlap >= self.knowledge_chunk_size:
+            raise ValueError(
+                "knowledge_chunk_overlap必须小于knowledge_chunk_size"
+            )
 
     model_config = SettingsConfigDict(
         env_file=".env",

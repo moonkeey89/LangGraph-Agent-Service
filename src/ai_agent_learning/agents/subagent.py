@@ -1,10 +1,11 @@
+import json
 import logging
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -32,9 +33,45 @@ class SubagentResult:
     result: str | None
     error: str | None
     retry_recommended: bool
+    sources: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+
+def _knowledge_sources(messages: list) -> list[dict[str, object]]:
+    sources: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for message in messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        if message.name != "search_knowledge_base":
+            continue
+        try:
+            payload = json.loads(str(message.content))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        results = payload.get("results", []) if isinstance(payload, dict) else []
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            chunk_id = str(result.get("chunk_id", ""))
+            if not chunk_id or chunk_id in seen:
+                continue
+            seen.add(chunk_id)
+            sources.append(
+                {
+                    key: result.get(key)
+                    for key in (
+                        "source",
+                        "page",
+                        "document_id",
+                        "chunk_id",
+                        "score",
+                    )
+                }
+            )
+    return sources
 
 
 def _route_after_subagent(state: AgentState) -> Literal["tools", "end"]:
@@ -171,4 +208,5 @@ class StatelessReActSubagent:
             result=str(final_message.content),
             error=None,
             retry_recommended=False,
+            sources=_knowledge_sources(messages),
         )

@@ -2074,3 +2074,144 @@ ping、`Cache-Control: no-cache`、`X-Accel-Buffering: no` 和断开时取消响
 服务适配器收到关闭后设置停止标志，在下一个 LangGraph chunk 边界关闭同步迭代。
 同步 DeepSeek HTTP 调用若正阻塞在网络等待中，第一版不能在任意指令中间强制终止，
 但不会在断开后主动启动第二次 Graph 或重放副作用。
+
+---
+
+## 28. 原生 JavaScript 聊天页
+
+这一阶段没有增加新的 Agent 能力，而是给现有 HTTP/SSE 服务增加一个最薄的浏览器
+客户端。它验证了“界面”和“Agent 核心”可以相互独立：页面不了解 StateGraph 内部
+状态，只认识公开 API 与公开 SSE 事件。
+
+完整调用链如下：
+
+```text
+浏览器表单
+  → fetch POST /api/v1/agent/stream
+      JSON: message + thread_id
+      Header: X-User-ID
+  → FastAPI Route
+  → AgentService.stream
+  → LangGraph graph.stream（一次执行）
+  → started / progress / token / completed|interrupted|error
+  → ReadableStream + TextDecoder
+  → SSE Parser
+  → 同一个 Agent 消息气泡或审批区域
+```
+
+浏览器不能使用标准 `EventSource`，因为该 API 主要用于 GET，且不适合本项目需要的
+JSON POST 请求体与 `X-User-ID` 请求头。因此页面使用 `fetch()` 取得响应，再通过
+`response.body.getReader()` 逐块读取字节。
+
+网络 chunk 与 SSE event 没有一一对应关系。一条事件可能被拆成多个 chunk，一个
+chunk 也可能包含多条事件。独立解析器始终保留未完成的文本 buffer：先用同一个
+流式 `TextDecoder` 解码 UTF-8 字节，再按 SSE 空行寻找完整事件；完整部分解析
+`event:` 和 `data:`，剩余部分留给下一次读取。这也避免中文字符恰好在字节边界被
+拆开时产生乱码。非法 JSON 只生成可见警告，并继续尝试解析后续事件。
+
+`user_id` 只是开发阶段的请求头模拟，保存在浏览器 `localStorage` 中；它不是登录或
+认证。`thread_id` 同样保存在本地，刷新后继续定位原 Checkpoint。点击“新建会话”
+会生成新的随机 thread，因此不会继承旧 thread 的短期消息，但相同 user 仍然可以
+通过后端长期记忆层访问自己的跨 thread 事实。页面不会保存 API Key、Checkpoint、
+内部 State 或长期记忆内容。
+
+收到 `interrupted` 后，页面停止 SSE 读取并显示审批卡。批准或拒绝只调用一次现有
+`POST /api/v1/agent/resume`，携带原 `thread_id`；按钮提交后立即锁定，防止重复恢复
+和重复副作用。第一版 resume 仍是非流式 JSON 响应。
+
+“停止”按钮通过 `AbortController` 取消当前浏览器 fetch 和读取。它只表示客户端不再
+等待结果，不代表服务端事务已经回滚，也不能保证正在运行的同步工具立刻停止。若不
+确定后端执行到了哪里，教学页面建议新建会话或先检查 Checkpoint，不能把停止按钮
+当成撤销副作用的保证。
+
+前端挂载只占用 `/` 与 `/assets`，因此 `/api`、`/docs`、`/redoc` 和 `/openapi.json`
+仍由 FastAPI 原路由处理。页面输出统一使用 `textContent`，第一版不解释 Markdown，
+也不会把模型文本作为 HTML 执行。
+
+---
+
+## 29. RAG知识库最小闭环
+
+RAG解决的是“回答必须来自某批外部文档”的问题，不是让Agent记住某个用户的偏好。
+本项目因此保留三套独立状态：
+
+| 能力 | 定位键 | 存储 | 保存内容 |
+| --- | --- | --- | --- |
+| Checkpoint | thread_id | SQLite | Graph状态、消息、interrupt、重试等执行现场 |
+| 长期记忆 | user_id namespace | LangGraph SqliteStore | 用户事实、偏好和目标 |
+| RAG知识库 | knowledge_base_id metadata | Chroma | 离线文档切分后的证据chunk和来源 |
+
+三者都可能持久化，但“持久化”不等于职责相同。对话不会自动写入RAG，文档也不会写进
+用户记忆。RAG使用独立的`data/knowledge_chroma/`，长期记忆仍使用
+`data/memories.sqlite`。
+
+### 离线入库
+
+```text
+ai-agent-learning-ingest / python -m ai_agent_learning.knowledge.cli
+  → 校验knowledge_base_id与文件路径
+  → LangChain BaseLoader实现
+       TXT/Markdown: UTF-8文本
+       PDF: pypdf逐页提取
+  → RecursiveCharacterTextSplitter
+  → 为document/chunk计算稳定ID
+  → 复用LocalModel2VecEmbeddings
+  → Chroma upsert新chunk
+  → 删除同一文档已经失效的旧chunk
+```
+
+默认`chunk_size=800`、`chunk_overlap=120`。800字符能让教学文档片段保留一个较完整的
+语义段落，又不会一次把整篇长文送给模型；120字符重叠降低事实刚好跨切分边界时丢失
+上下文的风险。分隔符优先空行、换行和中英文句子边界，最后才按字符切开。
+
+`document_id`由`knowledge_base_id + 规范化文件路径`计算，因此同一路径重新入库仍是
+同一文档；`chunk_id`由`document_id + page + 序号 + content`计算。重复文档执行upsert
+不会增加重复记录。文件修改后，新内容产生新chunk ID，完成upsert后再删除旧ID；若
+Embedding阶段失败，旧文档还没有被删除。
+
+每个Chroma记录包含：
+
+```text
+document: chunk正文
+metadata:
+  knowledge_base_id
+  document_id
+  source（只保存文件名，不暴露本机绝对路径）
+  page（文本文件为-1，领域模型转回None）
+  chunk_id
+```
+
+### 在线检索与Agent协作
+
+```text
+用户问题
+  → Supervisor判断是否需要私有文档
+  → ask_knowledge_agent(task)
+  → Knowledge Agent
+       → search_knowledge_base(query)恰好一次
+       → KnowledgeRetriever.search
+       → Chroma where knowledge_base_id=受控配置
+       → Top-K + 相关度阈值
+       → 稳定KnowledgeSearchResult
+       → LLM仅根据证据生成摘要
+  → Supervisor整合草稿
+  → Critic检查证据与引用是否存在、是否越界
+  → Finalize
+  → Memory Manager只处理用户消息，不保存知识库文档
+```
+
+第一版`knowledge_base_id`来自Settings，在Graph创建时闭包注入。LLM可见的
+`search_knowledge_base`工具schema只有`query`，看不到也不能填写user_id或
+knowledge_base_id。默认检索3条，余弦相似度分数低于0.35的结果被丢弃；全部低于阈值
+时返回`no_evidence / 未找到可靠证据`，Knowledge Agent不会再调用LLM猜答案。
+
+文档内容被明确标记为不可执行证据。即使chunk中含有“忽略系统提示”“修改user_id”或
+“调用其他工具”，Knowledge Agent也没有相应权限，受控ID也不在工具参数中。这个边界
+能降低提示注入风险，但不能把Prompt当成绝对安全证明；生产系统还需要文档治理、内容
+过滤、模型评测和更严格的授权。
+
+Knowledge Agent返回的`sources`来自实际检索结果，不由Supervisor自由生成。API适配层
+只读取本轮`ask_knowledge_agent` ToolMessage中的白名单字段，最终非流式响应和SSE
+`completed`事件都以向后兼容方式增加`sources`。SSE仅公开“正在检索知识库”和“已找到
+若干片段”，不会发送正文、向量、完整State或数据库路径。浏览器使用`textContent`
+显示文件名、页码和chunk ID。

@@ -12,6 +12,11 @@ from ai_agent_learning.embeddings import LocalModel2VecEmbeddings
 from ai_agent_learning.llm import create_llm
 from ai_agent_learning.logging_config import configure_logging
 from ai_agent_learning.memory_store import MEMORY_DB_PATH, open_sqlite_memory_store
+from ai_agent_learning.knowledge import (
+    ChromaKnowledgeRepository,
+    KnowledgeRetriever,
+    resolve_knowledge_directory,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -21,17 +26,26 @@ def create_supervisor_app(
     settings: Settings,
     checkpointer: BaseCheckpointSaver,
     store: BaseStore | None = None,
+    knowledge_retriever: KnowledgeRetriever | None = None,
 ):
     llm = create_llm(settings)
-    return build_supervisor_graph(
-        llm,
-        checkpointer=checkpointer,
-        store=store,
-        memory_confidence_threshold=(
+    graph_options = {
+        "checkpointer": checkpointer,
+        "store": store,
+        "memory_confidence_threshold": (
             settings.memory_manager_confidence_threshold
         ),
-        max_subagent_calls=settings.supervisor_max_subagent_calls,
-    )
+        "max_subagent_calls": settings.supervisor_max_subagent_calls,
+    }
+    if knowledge_retriever is not None:
+        graph_options.update(
+            {
+                "knowledge_retriever": knowledge_retriever,
+                "knowledge_base_id": settings.knowledge_base_id,
+                "knowledge_top_k": settings.knowledge_top_k,
+            }
+        )
+    return build_supervisor_graph(llm, **graph_options)
 
 
 def main() -> int:
@@ -54,8 +68,24 @@ def main() -> int:
                 embeddings=embeddings,
                 dimensions=settings.memory_embedding_dimensions,
             ) as store,
+            ChromaKnowledgeRepository(
+                persist_directory=resolve_knowledge_directory(
+                    settings.knowledge_chroma_directory
+                ),
+                embeddings=embeddings,
+            ) as knowledge_repository,
         ):
-            app = create_supervisor_app(settings, checkpointer, store)
+            knowledge_retriever = KnowledgeRetriever(
+                knowledge_repository,
+                default_top_k=settings.knowledge_top_k,
+                relevance_threshold=settings.knowledge_relevance_threshold,
+            )
+            app = create_supervisor_app(
+                settings,
+                checkpointer,
+                store,
+                knowledge_retriever,
+            )
 
             user_id = prompt_user_id()
             if user_id is None:

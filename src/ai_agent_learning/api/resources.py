@@ -9,6 +9,11 @@ from ai_agent_learning.embeddings import LocalModel2VecEmbeddings
 from ai_agent_learning.llm import create_llm
 from ai_agent_learning.logging_config import configure_logging
 from ai_agent_learning.memory_store import open_sqlite_memory_store
+from ai_agent_learning.knowledge import (
+    ChromaKnowledgeRepository,
+    KnowledgeRetriever,
+    resolve_knowledge_directory,
+)
 
 
 @contextmanager
@@ -26,7 +31,20 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
             embeddings=embeddings,
             dimensions=active_settings.memory_embedding_dimensions,
         ) as store,
+        ChromaKnowledgeRepository(
+            persist_directory=resolve_knowledge_directory(
+                active_settings.knowledge_chroma_directory
+            ),
+            embeddings=embeddings,
+        ) as knowledge_repository,
     ):
+        knowledge_retriever = KnowledgeRetriever(
+            knowledge_repository,
+            default_top_k=active_settings.knowledge_top_k,
+            relevance_threshold=(
+                active_settings.knowledge_relevance_threshold
+            ),
+        )
         graph = build_supervisor_graph(
             llm,
             checkpointer=checkpointer,
@@ -37,5 +55,8 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
             max_subagent_calls=(
                 active_settings.supervisor_max_subagent_calls
             ),
+            knowledge_retriever=knowledge_retriever,
+            knowledge_base_id=active_settings.knowledge_base_id,
+            knowledge_top_k=active_settings.knowledge_top_k,
         )
         yield AgentService(graph)

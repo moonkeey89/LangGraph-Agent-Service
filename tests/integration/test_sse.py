@@ -4,7 +4,12 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    ToolMessage,
+)
 from langgraph.types import Interrupt
 
 from ai_agent_learning.api.app import create_app
@@ -59,6 +64,85 @@ class StreamingFakeGraph:
             raise RuntimeError(
                 "API_KEY=secret; E:/private/checkpoints.sqlite; traceback"
             )
+
+        if message == "rag":
+            source = {
+                "source": "manual.md",
+                "page": 2,
+                "document_id": "doc-real",
+                "chunk_id": "chunk-real",
+                "score": 0.95,
+            }
+            yield self.update("memory_recall")
+            yield {
+                "type": "updates",
+                "ns": (),
+                "data": {
+                    "agent": {
+                        "messages": [
+                            AIMessage(
+                                content="",
+                                tool_calls=[
+                                    {
+                                        "name": "ask_knowledge_agent",
+                                        "args": {"task": "查询手册"},
+                                        "id": "rag-call",
+                                        "type": "tool_call",
+                                    }
+                                ],
+                            )
+                        ]
+                    }
+                },
+            }
+            handoff = ToolMessage(
+                content=json.dumps(
+                    {
+                        "agent_name": "knowledge_agent",
+                        "status": "success",
+                        "result": "ORBIT-731",
+                        "error": None,
+                        "retry_recommended": False,
+                        "sources": [source],
+                    }
+                ),
+                name="ask_knowledge_agent",
+                tool_call_id="rag-call",
+            )
+            yield {
+                "type": "updates",
+                "ns": (),
+                "data": {"tools": {"messages": [handoff]}},
+            }
+            answer = "项目代号是ORBIT-731"
+            yield {
+                "type": "messages",
+                "ns": (),
+                "data": (
+                    AIMessageChunk(content=answer),
+                    {"langgraph_node": "agent"},
+                ),
+            }
+            for node in (
+                "agent",
+                "capture_draft",
+                "critic",
+                "finalize",
+                "memory_manager",
+                "memory_executor",
+            ):
+                yield self.update(node)
+            state["values"].update(
+                {
+                    "messages": [
+                        HumanMessage(content=message),
+                        handoff,
+                        AIMessage(content=answer),
+                    ],
+                    "final_answer": answer,
+                }
+            )
+            return
 
         yield self.update("memory_recall")
         yield self.update("agent")
@@ -288,6 +372,32 @@ class SseApiTests(unittest.TestCase):
         self.assertEqual(self.graph.stream_calls, 1)
         self.assertEqual(self.graph.invoke_calls, 0)
         self.assertEqual(self.graph.memory_writes, 1)
+
+    def test_rag_progress_and_completed_sources_are_safe(self):
+        *_, events = self.stream("rag", "stream-rag")
+        progress = [
+            item["data"]
+            for item in events
+            if item["event"] == "progress"
+        ]
+        self.assertTrue(
+            any(item["node"] == "knowledge_search" for item in progress)
+        )
+        self.assertTrue(
+            any(
+                item["node"] == "knowledge_results"
+                and "1" in item["message"]
+                for item in progress
+            )
+        )
+        completed = events[-1]
+        self.assertEqual(completed["event"], "completed")
+        self.assertEqual(
+            completed["data"]["sources"][0]["chunk_id"],
+            "chunk-real",
+        )
+        serialized = json.dumps(events, ensure_ascii=False)
+        self.assertNotIn("数据库路径", serialized)
 
 
 if __name__ == "__main__":

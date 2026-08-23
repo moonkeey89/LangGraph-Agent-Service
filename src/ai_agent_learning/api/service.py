@@ -6,7 +6,7 @@ from threading import Event, RLock
 from typing import Any, Literal, Protocol
 
 import anyio
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 
 from ai_agent_learning.agent.context import AgentContext
@@ -62,11 +62,21 @@ class InterruptData:
 
 
 @dataclass(frozen=True)
+class KnowledgeSourceData:
+    source: str
+    page: int | None
+    document_id: str
+    chunk_id: str
+    score: float
+
+
+@dataclass(frozen=True)
 class AgentExecutionResult:
     status: Literal["completed", "interrupted"]
     thread_id: str
     answer: str | None = None
     interrupts: list[InterruptData] = field(default_factory=list)
+    sources: list[KnowledgeSourceData] = field(default_factory=list)
 
 
 StreamEventType = Literal[
@@ -120,6 +130,54 @@ def _last_answer(result: Any) -> str | None:
     if isinstance(final_answer, str) and final_answer.strip():
         return final_answer.strip()
     return None
+
+
+def _knowledge_sources(result: Any) -> list[KnowledgeSourceData]:
+    if not isinstance(result, dict):
+        return []
+    messages = result.get("messages", [])
+    latest_human_index = -1
+    for index in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[index], HumanMessage):
+            latest_human_index = index
+            break
+    sources: list[KnowledgeSourceData] = []
+    seen: set[str] = set()
+    for message in messages[latest_human_index + 1 :]:
+        if not isinstance(message, ToolMessage):
+            continue
+        if message.name != "ask_knowledge_agent":
+            continue
+        try:
+            payload = json.loads(str(message.content))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        raw_sources = payload.get("sources", []) if isinstance(payload, dict) else []
+        for item in raw_sources:
+            if not isinstance(item, dict):
+                continue
+            chunk_id = str(item.get("chunk_id", ""))
+            document_id = str(item.get("document_id", ""))
+            source = str(item.get("source", ""))
+            if not chunk_id or not document_id or not source or chunk_id in seen:
+                continue
+            try:
+                score = float(item.get("score", 0.0))
+                page = item.get("page")
+                normalized_page = int(page) if page is not None else None
+            except (TypeError, ValueError):
+                continue
+            seen.add(chunk_id)
+            sources.append(
+                KnowledgeSourceData(
+                    source=source,
+                    page=normalized_page,
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    score=score,
+                )
+            )
+    return sources
 
 
 def _resume_value(
@@ -295,11 +353,25 @@ class AgentService:
 
                 values = getattr(final_snapshot, "values", {}) or {}
                 answer = _last_answer(values)
+                sources = _knowledge_sources(values)
                 for content in _verified_answer_tokens(answer, token_buffers):
                     yield AgentStreamEvent("token", {"content": content})
                 yield AgentStreamEvent(
                     "completed",
-                    {"thread_id": thread_id, "answer": answer},
+                    {
+                        "thread_id": thread_id,
+                        "answer": answer,
+                        "sources": [
+                            {
+                                "source": item.source,
+                                "page": item.page,
+                                "document_id": item.document_id,
+                                "chunk_id": item.chunk_id,
+                                "score": item.score,
+                            }
+                            for item in sources
+                        ],
+                    },
                 )
         except AgentServiceError as error:
             yield AgentStreamEvent(
@@ -369,6 +441,7 @@ class AgentService:
             status="completed",
             thread_id=thread_id,
             answer=_last_answer(result),
+            sources=_knowledge_sources(result),
         )
 
 
@@ -376,6 +449,8 @@ _SAFE_PROGRESS: dict[str, tuple[str, str]] = {
     "memory_recall": ("memory_recall", "正在检索与当前问题相关的长期记忆"),
     "agent": ("supervisor", "Supervisor 正在分析任务并协调所需能力"),
     "tools": ("tools", "正在执行 Agent 选择的能力"),
+    "knowledge_search": ("knowledge_search", "正在检索知识库"),
+    "knowledge_results": ("knowledge_results", "知识库检索已完成"),
     "tool_success": ("tools", "工具执行完成，正在返回 Agent"),
     "human_review": ("human_review", "工具失败，正在准备人工复核"),
     "failure": ("failure", "正在生成安全的失败降级回答"),
@@ -404,6 +479,62 @@ def _progress_events(data: Any) -> Iterator[AgentStreamEvent]:
                 "message": description,
             },
         )
+        node_update = data.get(node_name)
+        if str(node_name) == "agent" and _calls_knowledge_agent(node_update):
+            yield AgentStreamEvent(
+                "progress",
+                {
+                    "stage": "knowledge_search",
+                    "node": "knowledge_search",
+                    "message": "正在检索知识库",
+                },
+            )
+        if str(node_name) == "tools":
+            source_count = _knowledge_result_count(node_update)
+            if source_count is not None:
+                yield AgentStreamEvent(
+                    "progress",
+                    {
+                        "stage": "knowledge_results",
+                        "node": "knowledge_results",
+                        "message": f"已找到{source_count}个相关片段",
+                    },
+                )
+
+
+def _messages_from_update(value: Any) -> list[Any]:
+    if not isinstance(value, dict):
+        return []
+    messages = value.get("messages", [])
+    return list(messages) if isinstance(messages, (list, tuple)) else []
+
+
+def _calls_knowledge_agent(value: Any) -> bool:
+    for message in _messages_from_update(value):
+        if not isinstance(message, AIMessage):
+            continue
+        if any(
+            call.get("name") == "ask_knowledge_agent"
+            for call in message.tool_calls
+            if isinstance(call, dict)
+        ):
+            return True
+    return False
+
+
+def _knowledge_result_count(value: Any) -> int | None:
+    for message in _messages_from_update(value):
+        if not isinstance(message, ToolMessage):
+            continue
+        if message.name != "ask_knowledge_agent":
+            continue
+        try:
+            payload = json.loads(str(message.content))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return 0
+        sources = payload.get("sources", []) if isinstance(payload, dict) else []
+        return len(sources) if isinstance(sources, list) else 0
+    return None
 
 
 def _buffer_public_token(

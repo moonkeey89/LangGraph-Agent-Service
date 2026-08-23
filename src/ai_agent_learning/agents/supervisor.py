@@ -9,14 +9,16 @@ from ai_agent_learning.agent.graph import build_graph
 from ai_agent_learning.agent.memory_manager import (
     DEFAULT_MEMORY_CONFIDENCE_THRESHOLD,
 )
-from ai_agent_learning.agents.math_agent import create_math_agent
 from ai_agent_learning.agents.critic import CriticWorkflow
+from ai_agent_learning.agents.knowledge_agent import create_knowledge_agent
+from ai_agent_learning.agents.math_agent import create_math_agent
 from ai_agent_learning.agents.subagent_tools import (
     DEFAULT_MAX_SUBAGENT_CALLS,
     SubagentInvoker,
     create_subagent_tools,
 )
 from ai_agent_learning.agents.travel_agent import create_travel_agent
+from ai_agent_learning.knowledge import KnowledgeRetriever
 from ai_agent_learning.tools import (
     delete_memory,
     list_memories,
@@ -30,6 +32,8 @@ SUPERVISOR_PROMPT = """你是多Agent系统的 Supervisor，负责理解完整�
 你不能直接执行 get_weather、search_attraction 或 calculate，因为这些底层工具没有绑定给你。
 跨领域任务按顺序调用所需Subagent，每次只调用一个；收集全部结果后只输出一个整合答案。
 普通知识问题可以直接回答，不要为了展示多Agent而调用Subagent。
+涉及内部手册、私有文档、知识库、文档代号或要求“根据资料”的问题必须委派给
+ask_knowledge_agent；不得用模型常识猜测私有文档内容。
 传给Subagent的task只包含完成子任务必需的信息，不复制完整会话历史；如长期记忆与任务相关，
 只在task中包含必要事实，绝不传递user_id、thread_id或无关记忆。
 Subagent返回的JSON是结果摘要：status=failed时说明该部分失败，并继续整合其他已成功结果。
@@ -54,15 +58,28 @@ def build_supervisor_graph(
     max_subagent_calls: int = DEFAULT_MAX_SUBAGENT_CALLS,
     travel_agent: SubagentInvoker | None = None,
     math_agent: SubagentInvoker | None = None,
+    knowledge_agent: SubagentInvoker | None = None,
+    knowledge_retriever: KnowledgeRetriever | None = None,
+    knowledge_base_id: str = "demo",
+    knowledge_top_k: int = 3,
     critic_llm: BaseChatModel | None = None,
     revision_llm: BaseChatModel | None = None,
 ):
     """Compile the checkpointed Supervisor around two stateless specialists."""
     travel = travel_agent or create_travel_agent(llm)
     math = math_agent or create_math_agent(llm)
+    knowledge = knowledge_agent
+    if knowledge is None and knowledge_retriever is not None:
+        knowledge = create_knowledge_agent(
+            llm,
+            retriever=knowledge_retriever,
+            knowledge_base_id=knowledge_base_id,
+            top_k=knowledge_top_k,
+        )
     handoff_tools = create_subagent_tools(
         travel,
         math,
+        knowledge_agent=knowledge,
         max_subagent_calls=max_subagent_calls,
     )
     supervisor_tools = [*handoff_tools, *SUPERVISOR_MEMORY_TOOLS]

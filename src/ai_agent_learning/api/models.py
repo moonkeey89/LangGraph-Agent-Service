@@ -51,11 +51,20 @@ class InterruptResponse(BaseModel):
     payload: dict[str, Any]
 
 
+class KnowledgeSourceResponse(BaseModel):
+    source: str
+    page: int | None = None
+    document_id: str
+    chunk_id: str
+    score: float
+
+
 class AgentResponse(BaseModel):
     status: Literal["completed", "interrupted"]
     thread_id: str
     answer: str | None = None
     interrupts: list[InterruptResponse] = Field(default_factory=list)
+    sources: list[KnowledgeSourceResponse] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

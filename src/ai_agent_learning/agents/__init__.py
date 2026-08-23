@@ -1,3 +1,4 @@
+from ai_agent_learning.agents.knowledge_agent import create_knowledge_agent
 from ai_agent_learning.agents.math_agent import create_math_agent
 from ai_agent_learning.agents.critic import CriticDecision
 from ai_agent_learning.agents.subagent import (
@@ -13,6 +14,7 @@ __all__ = [
     "SubagentResult",
     "CriticDecision",
     "build_supervisor_graph",
+    "create_knowledge_agent",
     "create_math_agent",
     "create_travel_agent",
 ]

@@ -12,6 +12,7 @@ from ai_agent_learning.api.models import (
     HealthResponse,
     InterruptResponse,
     InvokeRequest,
+    KnowledgeSourceResponse,
     ResumeRequest,
 )
 from ai_agent_learning.api.service import AgentExecutionResult, AgentService
@@ -32,6 +33,16 @@ def _response(result: AgentExecutionResult) -> AgentResponse:
                 payload=item.payload,
             )
             for item in result.interrupts
+        ],
+        sources=[
+            KnowledgeSourceResponse(
+                source=item.source,
+                page=item.page,
+                document_id=item.document_id,
+                chunk_id=item.chunk_id,
+                score=item.score,
+            )
+            for item in result.sources
         ],
     )
 

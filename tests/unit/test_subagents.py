@@ -4,10 +4,12 @@ from langchain_core.messages import AIMessage
 
 from ai_agent_learning.agents import (
     build_supervisor_graph,
+    create_knowledge_agent,
     create_math_agent,
     create_travel_agent,
 )
 from ai_agent_learning.agents.subagent_tools import create_subagent_tools
+from ai_agent_learning.knowledge.models import KnowledgeSearchResponse
 
 
 class DirectBoundModel:
@@ -23,6 +25,19 @@ class RecordingModel:
         names = frozenset(tool.name for tool in tools)
         self.bound_tool_sets.append(names)
         return DirectBoundModel()
+
+    def invoke(self, _messages):
+        return AIMessage(content="基于证据回答")
+
+
+class EmptyKnowledgeRetriever:
+    def search(self, **kwargs):
+        return KnowledgeSearchResponse(
+            status="no_evidence",
+            knowledge_base_id=kwargs["knowledge_base_id"],
+            results=[],
+            message="未找到可靠证据",
+        )
 
 
 class SubagentTests(unittest.TestCase):
@@ -56,6 +71,28 @@ class SubagentTests(unittest.TestCase):
             self.assertEqual(set(properties), {"task"})
             self.assertNotIn("user_id", properties)
             self.assertNotIn("thread_id", properties)
+
+    def test_knowledge_agent_has_only_controlled_search_tool(self):
+        llm = RecordingModel()
+        knowledge = create_knowledge_agent(
+            llm,
+            retriever=EmptyKnowledgeRetriever(),
+            knowledge_base_id="demo",
+            top_k=3,
+        )
+        tools = create_subagent_tools(
+            create_travel_agent(llm),
+            create_math_agent(llm),
+            knowledge_agent=knowledge,
+        )
+
+        self.assertEqual(knowledge.tool_names, {"search_knowledge_base"})
+        schema = knowledge.search_tool.tool_call_schema.model_json_schema()
+        self.assertEqual(set(schema["properties"]), {"query"})
+        self.assertEqual(
+            {tool.name for tool in tools},
+            {"ask_travel_agent", "ask_math_agent", "ask_knowledge_agent"},
+        )
 
     def test_supervisor_binds_handoffs_but_not_specialist_tools(self):
         llm = RecordingModel()

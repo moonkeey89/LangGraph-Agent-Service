@@ -9,19 +9,23 @@ description = "A teaching project for building a LangGraph ReAct agent."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "chromadb>=1.4,<2",
     "fastapi>=0.141,<1",
     "langchain-core>=1.5,<2",
     "langchain-openai>=1.5,<2",
+    "langchain-text-splitters>=1.0,<2",
     "langgraph>=1.2,<2",
     "langgraph-checkpoint-sqlite>=3.1.1,<4",
     "pydantic>=2.13,<3",
     "pydantic-settings>=2.15,<3",
     "model2vec>=0.8,<1",
+    "pypdf>=6,<7",
     "uvicorn>=0.51,<1",
 ]
 
 [project.scripts]
 ai-agent-learning = "ai_agent_learning.cli:main"
+ai-agent-learning-ingest = "ai_agent_learning.knowledge.cli:main"
 ai-agent-learning-multi = "ai_agent_learning.multi_agent_cli:main"
 
 [tool.setuptools.packages.find]
