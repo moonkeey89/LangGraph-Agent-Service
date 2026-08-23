@@ -1,8 +1,13 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai_agent_learning.knowledge.models import validate_knowledge_base_id
+from ai_agent_learning.research.service import (
+    MAX_PROJECT_DESCRIPTION_LENGTH,
+    MAX_PROJECT_NAME_LENGTH,
+    MAX_RESEARCH_QUESTION_LENGTH,
+)
 
 
 MAX_IDENTIFIER_LENGTH = 128
@@ -120,3 +125,105 @@ class KnowledgeUploadItemResponse(BaseModel):
 
 class KnowledgeUploadResponse(BaseModel):
     items: list[KnowledgeUploadItemResponse]
+
+
+class CreateResearchProjectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=MAX_PROJECT_NAME_LENGTH)
+    description: str = Field(
+        default="",
+        max_length=MAX_PROJECT_DESCRIPTION_LENGTH,
+    )
+    research_question: str = Field(
+        default="",
+        max_length=MAX_RESEARCH_QUESTION_LENGTH,
+    )
+    status: Literal["draft", "active", "archived"] = "draft"
+    default_knowledge_base_id: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name 不能为空")
+        return normalized
+
+    @field_validator("description", "research_question")
+    @classmethod
+    def normalize_optional_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("default_knowledge_base_id")
+    @classmethod
+    def normalize_project_knowledge_base_id(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        return None if value is None else validate_knowledge_base_id(value)
+
+
+class UpdateResearchProjectRequest(BaseModel):
+    name: str | None = Field(default=None, max_length=MAX_PROJECT_NAME_LENGTH)
+    description: str | None = Field(
+        default=None,
+        max_length=MAX_PROJECT_DESCRIPTION_LENGTH,
+    )
+    research_question: str | None = Field(
+        default=None,
+        max_length=MAX_RESEARCH_QUESTION_LENGTH,
+    )
+    status: Literal["draft", "active", "archived"] | None = None
+    default_knowledge_base_id: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_partial_update(self) -> "UpdateResearchProjectRequest":
+        non_nullable = {
+            "name",
+            "description",
+            "research_question",
+            "status",
+        }
+        for field_name in non_nullable & self.model_fields_set:
+            if getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} 不能为 null")
+        if "name" in self.model_fields_set and not (self.name or "").strip():
+            raise ValueError("name 不能为空")
+        return self
+
+    @field_validator("name", "description", "research_question")
+    @classmethod
+    def normalize_update_text(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
+    @field_validator("default_knowledge_base_id")
+    @classmethod
+    def normalize_update_knowledge_base_id(
+        cls,
+        value: str | None,
+    ) -> str | None:
+        return None if value is None else validate_knowledge_base_id(value)
+
+    def changes(self) -> dict[str, Any]:
+        return self.model_dump(exclude_unset=True)
+
+
+class ResearchProjectResponse(BaseModel):
+    project_id: str
+    owner_user_id: str
+    name: str
+    description: str
+    research_question: str
+    status: Literal["draft", "active", "archived"]
+    default_knowledge_base_id: str | None
+    created_at: str
+    updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ErrorResponse(BaseModel):
+    detail: str

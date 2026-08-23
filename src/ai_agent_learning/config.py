@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     knowledge_relevance_threshold: float | None = 0.35
     knowledge_upload_max_file_size_mb: int = 10
     knowledge_upload_max_files: int = 5
+    researchflow_database_path: Path = Path("data/researchflow.sqlite")
     log_level: str = "INFO"
 
     @field_validator("memory_embedding_dimensions")

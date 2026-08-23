@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from threading import Event, RLock
 from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING
 
 import anyio
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -17,6 +18,9 @@ from ai_agent_learning.knowledge.service import (
 
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from ai_agent_learning.research.service import ResearchService
 
 
 class CompiledGraph(Protocol):
@@ -205,9 +209,11 @@ class AgentService:
         graph: CompiledGraph,
         *,
         knowledge_service: KnowledgeLibraryService | None = None,
+        research_service: "ResearchService | None" = None,
     ):
         self.graph = graph
         self.knowledge_service = knowledge_service
+        self.research_service = research_service
         # SqliteSaver/SqliteStore connections are shared for the lifespan.
         # Serialize graph calls in this minimal version to avoid concurrent use
         # of the same synchronous SQLite connections from worker threads.

@@ -19,6 +19,11 @@ from ai_agent_learning.knowledge import (
     resolve_knowledge_directory,
     resolve_source_directory,
 )
+from ai_agent_learning.research import (
+    ResearchService,
+    open_research_catalog,
+    resolve_researchflow_path,
+)
 
 
 @contextmanager
@@ -45,6 +50,11 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
         open_knowledge_catalog(
             resolve_catalog_path(active_settings.knowledge_catalog_path)
         ) as knowledge_catalog,
+        open_research_catalog(
+            resolve_researchflow_path(
+                active_settings.researchflow_database_path
+            )
+        ) as research_catalog,
     ):
         knowledge_ingestor = KnowledgeIngestor(
             knowledge_repository,
@@ -75,6 +85,10 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
             ),
             ready_document_ids=knowledge_catalog.ready_document_ids,
         )
+        research_service = ResearchService(
+            research_catalog,
+            knowledge_service,
+        )
         graph = build_supervisor_graph(
             llm,
             checkpointer=checkpointer,
@@ -89,4 +103,8 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
             knowledge_base_id=active_settings.knowledge_base_id,
             knowledge_top_k=active_settings.knowledge_top_k,
         )
-        yield AgentService(graph, knowledge_service=knowledge_service)
+        yield AgentService(
+            graph,
+            knowledge_service=knowledge_service,
+            research_service=research_service,
+        )

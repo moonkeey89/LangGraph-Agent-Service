@@ -43,6 +43,10 @@ class SettingsTests(unittest.TestCase):
         )
         self.assertEqual(settings.knowledge_upload_max_file_size_mb, 10)
         self.assertEqual(settings.knowledge_upload_max_files, 5)
+        self.assertEqual(
+            settings.researchflow_database_path.as_posix(),
+            "data/researchflow.sqlite",
+        )
         self.assertEqual(settings.log_level, "INFO")
         self.assertNotIn("test-secret-key", repr(settings))
 
@@ -66,6 +70,7 @@ class SettingsTests(unittest.TestCase):
             "KNOWLEDGE_SOURCE_DIRECTORY": "custom/sources",
             "KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB": "8",
             "KNOWLEDGE_UPLOAD_MAX_FILES": "3",
+            "RESEARCHFLOW_DATABASE_PATH": "custom/research.sqlite",
             "LOG_LEVEL": "debug",
         }
 
@@ -90,6 +95,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.knowledge_relevance_threshold, 0.45)
         self.assertEqual(settings.knowledge_upload_max_file_size_mb, 8)
         self.assertEqual(settings.knowledge_upload_max_files, 3)
+        self.assertEqual(
+            settings.researchflow_database_path.as_posix(),
+            "custom/research.sqlite",
+        )
         self.assertEqual(settings.log_level, "DEBUG")
 
     def test_api_key_is_required(self):
