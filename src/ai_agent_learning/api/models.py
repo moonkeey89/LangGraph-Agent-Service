@@ -4,9 +4,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from ai_agent_learning.knowledge.models import validate_knowledge_base_id
 from ai_agent_learning.research.service import (
+    MAX_ACCEPTANCE_CRITERIA,
+    MAX_ACCEPTANCE_CRITERION_LENGTH,
     MAX_PROJECT_DESCRIPTION_LENGTH,
     MAX_PROJECT_NAME_LENGTH,
     MAX_RESEARCH_QUESTION_LENGTH,
+    MAX_TASK_OBJECTIVE_LENGTH,
+    MAX_TASK_TITLE_LENGTH,
+)
+from ai_agent_learning.research.task_state import (
+    MAX_TASK_RESULT_SUMMARY_LENGTH,
+    MAX_TASK_TRANSITION_REASON_LENGTH,
 )
 
 
@@ -227,3 +235,142 @@ class ResearchProjectResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+TaskType = Literal[
+    "literature_review",
+    "analysis",
+    "synthesis",
+    "general",
+]
+TaskStatus = Literal[
+    "pending",
+    "running",
+    "blocked",
+    "completed",
+    "failed",
+    "cancelled",
+]
+
+
+class CreateResearchTaskRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=MAX_TASK_TITLE_LENGTH)
+    objective: str = Field(default="", max_length=MAX_TASK_OBJECTIVE_LENGTH)
+    task_type: TaskType = "general"
+    acceptance_criteria: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_ACCEPTANCE_CRITERIA,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("title")
+    @classmethod
+    def normalize_task_title(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("title 不能为空")
+        return normalized
+
+    @field_validator("objective")
+    @classmethod
+    def normalize_task_objective(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("acceptance_criteria")
+    @classmethod
+    def normalize_acceptance_criteria(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            criterion = value.strip()
+            if not criterion:
+                raise ValueError("验收标准不能为空")
+            if len(criterion) > MAX_ACCEPTANCE_CRITERION_LENGTH:
+                raise ValueError(
+                    "单条验收标准不能超过 "
+                    f"{MAX_ACCEPTANCE_CRITERION_LENGTH} 个字符"
+                )
+            normalized.append(criterion)
+        return normalized
+
+
+class UpdateResearchTaskRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=MAX_TASK_TITLE_LENGTH)
+    objective: str | None = Field(
+        default=None,
+        max_length=MAX_TASK_OBJECTIVE_LENGTH,
+    )
+    task_type: TaskType | None = None
+    acceptance_criteria: list[str] | None = Field(
+        default=None,
+        max_length=MAX_ACCEPTANCE_CRITERIA,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_task_partial_update(self) -> "UpdateResearchTaskRequest":
+        for field_name in self.model_fields_set:
+            if getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} 不能为 null")
+        if "title" in self.model_fields_set and not (self.title or "").strip():
+            raise ValueError("title 不能为空")
+        return self
+
+    @field_validator("title", "objective")
+    @classmethod
+    def normalize_task_update_text(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
+
+    @field_validator("acceptance_criteria")
+    @classmethod
+    def normalize_task_update_criteria(
+        cls,
+        values: list[str] | None,
+    ) -> list[str] | None:
+        if values is None:
+            return None
+        return CreateResearchTaskRequest.normalize_acceptance_criteria(values)
+
+    def changes(self) -> dict[str, Any]:
+        return self.model_dump(exclude_unset=True)
+
+
+class TransitionResearchTaskRequest(BaseModel):
+    target_status: TaskStatus
+    reason: str | None = Field(
+        default=None,
+        max_length=MAX_TASK_TRANSITION_REASON_LENGTH,
+    )
+    result_summary: str | None = Field(
+        default=None,
+        max_length=MAX_TASK_RESULT_SUMMARY_LENGTH,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("reason", "result_summary")
+    @classmethod
+    def normalize_transition_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class ResearchTaskResponse(BaseModel):
+    task_id: str
+    project_id: str
+    title: str
+    objective: str
+    task_type: TaskType
+    status: TaskStatus
+    acceptance_criteria: list[str]
+    result_summary: str | None
+    error_message: str | None
+    created_at: str
+    updated_at: str
+    started_at: str | None
+    completed_at: str | None
+
+    model_config = ConfigDict(from_attributes=True)

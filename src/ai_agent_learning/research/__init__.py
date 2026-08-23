@@ -8,6 +8,9 @@ from ai_agent_learning.research.catalog import (
 from ai_agent_learning.research.models import (
     ResearchProject,
     ResearchProjectStatus,
+    ResearchTask,
+    ResearchTaskStatus,
+    ResearchTaskType,
 )
 from ai_agent_learning.research.service import (
     ResearchPersistenceError,
@@ -17,6 +20,9 @@ from ai_agent_learning.research.service import (
     ResearchProjectValidationError,
     ResearchService,
     ResearchServiceError,
+    ResearchTaskConflictError,
+    ResearchTaskNotFoundError,
+    ResearchTaskValidationError,
 )
 
 
@@ -33,6 +39,12 @@ __all__ = [
     "ResearchProjectValidationError",
     "ResearchService",
     "ResearchServiceError",
+    "ResearchTask",
+    "ResearchTaskConflictError",
+    "ResearchTaskNotFoundError",
+    "ResearchTaskStatus",
+    "ResearchTaskType",
+    "ResearchTaskValidationError",
     "open_research_catalog",
     "resolve_researchflow_path",
 ]
