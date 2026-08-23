@@ -7,9 +7,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from ai_agent_learning.api.frontend import attach_frontend
+from ai_agent_learning.api.knowledge_routes import router as knowledge_router
 from ai_agent_learning.api.resources import open_agent_service
 from ai_agent_learning.api.routes import router
 from ai_agent_learning.api.service import AgentService, AgentServiceError
+from ai_agent_learning.knowledge.service import KnowledgeServiceError
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ def create_app(
         lifespan=lifespan,
     )
     application.include_router(router)
+    application.include_router(knowledge_router)
     attach_frontend(application)
 
     @application.exception_handler(AgentServiceError)
@@ -46,6 +49,20 @@ def create_app(
         error: AgentServiceError,
     ) -> JSONResponse:
         logger.warning("Agent service rejected request: %s", type(error).__name__)
+        return JSONResponse(
+            status_code=error.status_code,
+            content={"detail": error.public_message},
+        )
+
+    @application.exception_handler(KnowledgeServiceError)
+    async def handle_knowledge_service_error(
+        _request: Request,
+        error: KnowledgeServiceError,
+    ) -> JSONResponse:
+        logger.warning(
+            "Knowledge service rejected request: %s",
+            type(error).__name__,
+        )
         return JSONResponse(
             status_code=error.status_code,
             content={"detail": error.public_message},

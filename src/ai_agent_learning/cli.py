@@ -265,9 +265,13 @@ def run_cli(
     app,
     thread_id: str,
     user_id: str = DEFAULT_USER_ID,
+    knowledge_base_id: str | None = None,
 ) -> None:
     config = {"configurable": {"thread_id": thread_id}}
-    context = AgentContext(user_id=user_id)
+    context = AgentContext(
+        user_id=user_id,
+        knowledge_base_id=knowledge_base_id,
+    )
 
     try:
         pending = _pending_interrupts(app, config)

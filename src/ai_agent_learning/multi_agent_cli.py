@@ -15,6 +15,8 @@ from ai_agent_learning.memory_store import MEMORY_DB_PATH, open_sqlite_memory_st
 from ai_agent_learning.knowledge import (
     ChromaKnowledgeRepository,
     KnowledgeRetriever,
+    open_knowledge_catalog,
+    resolve_catalog_path,
     resolve_knowledge_directory,
 )
 
@@ -74,11 +76,15 @@ def main() -> int:
                 ),
                 embeddings=embeddings,
             ) as knowledge_repository,
+            open_knowledge_catalog(
+                resolve_catalog_path(settings.knowledge_catalog_path)
+            ) as knowledge_catalog,
         ):
             knowledge_retriever = KnowledgeRetriever(
                 knowledge_repository,
                 default_top_k=settings.knowledge_top_k,
                 relevance_threshold=settings.knowledge_relevance_threshold,
+                ready_document_ids=knowledge_catalog.ready_document_ids,
             )
             app = create_supervisor_app(
                 settings,
@@ -104,7 +110,12 @@ def main() -> int:
                 MEMORY_DB_PATH,
                 settings.supervisor_max_subagent_calls,
             )
-            run_cli(app, thread_id, user_id)
+            run_cli(
+                app,
+                thread_id,
+                user_id,
+                knowledge_base_id=settings.knowledge_base_id,
+            )
     except Exception:
         logger.exception("Supervisor Agent startup failed")
         return 1

@@ -106,7 +106,11 @@ class SubagentDispatcher:
             _summary(normalized_task),
         )
         try:
-            result = subagent.invoke(normalized_task)
+            contextual_invoke = getattr(subagent, "invoke_with_context", None)
+            if callable(contextual_invoke):
+                result = contextual_invoke(normalized_task, runtime.context)
+            else:
+                result = subagent.invoke(normalized_task)
         except Exception as error:
             logger.exception("Subagent boundary failed: %s", subagent.agent_name)
             result = SubagentResult(

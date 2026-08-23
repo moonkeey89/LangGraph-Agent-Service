@@ -63,6 +63,7 @@ async def invoke_agent(
         message=request.message,
         thread_id=request.thread_id,
         user_id=user_id,
+        knowledge_base_id=request.knowledge_base_id,
     )
     return _response(result)
 
@@ -79,6 +80,7 @@ async def resume_agent(
         user_id=user_id,
         decision=request.decision,
         reason=request.reason,
+        knowledge_base_id=request.knowledge_base_id,
     )
     return _response(result)
 
@@ -97,6 +99,7 @@ async def stream_agent(
         message=request.message,
         thread_id=request.thread_id,
         user_id=user_id,
+        knowledge_base_id=request.knowledge_base_id,
     )
     try:
         async for item in event_stream:

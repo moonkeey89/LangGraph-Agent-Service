@@ -1,4 +1,5 @@
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 import chromadb
@@ -97,6 +98,7 @@ class ChromaKnowledgeRepository:
         knowledge_base_id: str,
         top_k: int,
         relevance_threshold: float | None,
+        document_ids: list[str] | None = None,
     ) -> KnowledgeSearchResponse:
         normalized_query = query.strip()
         if not normalized_query:
@@ -105,11 +107,26 @@ class ChromaKnowledgeRepository:
         if top_k <= 0:
             raise ValueError("top_k必须是正整数")
 
+        if document_ids is not None and not document_ids:
+            return KnowledgeSearchResponse(
+                status="no_evidence",
+                knowledge_base_id=knowledge_base_id,
+                results=[],
+                message="未找到可靠证据",
+            )
         query_vector = self.embeddings.embed_query(normalized_query)
+        where: dict[str, Any] = {"knowledge_base_id": knowledge_base_id}
+        if document_ids is not None:
+            where = {
+                "$and": [
+                    {"knowledge_base_id": knowledge_base_id},
+                    {"document_id": {"$in": document_ids}},
+                ]
+            }
         raw = self.collection.query(
             query_embeddings=[query_vector],
             n_results=top_k,
-            where={"knowledge_base_id": knowledge_base_id},
+            where=where,
             include=["documents", "metadatas", "distances"],
         )
         results = self._to_results(raw, relevance_threshold)
@@ -179,6 +196,30 @@ class ChromaKnowledgeRepository:
         )
         return len(self.collection.get(where=where, include=[]).get("ids", []))
 
+    def delete_document(
+        self,
+        *,
+        knowledge_base_id: str,
+        document_id: str,
+    ) -> None:
+        self.collection.delete(
+            where={
+                "$and": [
+                    {"knowledge_base_id": validate_knowledge_base_id(knowledge_base_id)},
+                    {"document_id": document_id},
+                ]
+            }
+        )
+
+    def delete_knowledge_base(self, *, knowledge_base_id: str) -> None:
+        self.collection.delete(
+            where={
+                "knowledge_base_id": validate_knowledge_base_id(
+                    knowledge_base_id
+                )
+            }
+        )
+
 
 class KnowledgeRetriever:
     def __init__(
@@ -187,6 +228,7 @@ class KnowledgeRetriever:
         *,
         default_top_k: int = 3,
         relevance_threshold: float | None = 0.35,
+        ready_document_ids: Callable[[str], list[str]] | None = None,
     ):
         if default_top_k <= 0:
             raise ValueError("default_top_k必须是正整数")
@@ -195,6 +237,7 @@ class KnowledgeRetriever:
         self.repository = repository
         self.default_top_k = default_top_k
         self.relevance_threshold = relevance_threshold
+        self.ready_document_ids = ready_document_ids
 
     def search(
         self,
@@ -203,9 +246,13 @@ class KnowledgeRetriever:
         knowledge_base_id: str,
         top_k: int | None = None,
     ) -> KnowledgeSearchResponse:
+        document_ids = None
+        if self.ready_document_ids is not None:
+            document_ids = list(self.ready_document_ids(knowledge_base_id))
         return self.repository.search(
             query=query,
             knowledge_base_id=knowledge_base_id,
             top_k=self.default_top_k if top_k is None else top_k,
             relevance_threshold=self.relevance_threshold,
+            document_ids=document_ids,
         )

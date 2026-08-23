@@ -11,8 +11,13 @@ from ai_agent_learning.logging_config import configure_logging
 from ai_agent_learning.memory_store import open_sqlite_memory_store
 from ai_agent_learning.knowledge import (
     ChromaKnowledgeRepository,
+    KnowledgeIngestor,
+    KnowledgeLibraryService,
     KnowledgeRetriever,
+    open_knowledge_catalog,
+    resolve_catalog_path,
     resolve_knowledge_directory,
+    resolve_source_directory,
 )
 
 
@@ -37,13 +42,38 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
             ),
             embeddings=embeddings,
         ) as knowledge_repository,
+        open_knowledge_catalog(
+            resolve_catalog_path(active_settings.knowledge_catalog_path)
+        ) as knowledge_catalog,
     ):
+        knowledge_ingestor = KnowledgeIngestor(
+            knowledge_repository,
+            chunk_size=active_settings.knowledge_chunk_size,
+            chunk_overlap=active_settings.knowledge_chunk_overlap,
+        )
+        knowledge_service = KnowledgeLibraryService(
+            catalog=knowledge_catalog,
+            repository=knowledge_repository,
+            ingestor=knowledge_ingestor,
+            source_directory=resolve_source_directory(
+                active_settings.knowledge_source_directory
+            ),
+            max_file_size_bytes=(
+                active_settings.knowledge_upload_max_file_size_mb
+                * 1024
+                * 1024
+            ),
+            max_files_per_upload=(
+                active_settings.knowledge_upload_max_files
+            ),
+        )
         knowledge_retriever = KnowledgeRetriever(
             knowledge_repository,
             default_top_k=active_settings.knowledge_top_k,
             relevance_threshold=(
                 active_settings.knowledge_relevance_threshold
             ),
+            ready_document_ids=knowledge_catalog.ready_document_ids,
         )
         graph = build_supervisor_graph(
             llm,
@@ -59,4 +89,4 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
             knowledge_base_id=active_settings.knowledge_base_id,
             knowledge_top_k=active_settings.knowledge_top_k,
         )
-        yield AgentService(graph)
+        yield AgentService(graph, knowledge_service=knowledge_service)

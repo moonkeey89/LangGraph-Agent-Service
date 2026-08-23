@@ -10,6 +10,10 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command, Interrupt
 
 from ai_agent_learning.agent.context import AgentContext
+from ai_agent_learning.knowledge.service import (
+    KnowledgeLibraryService,
+    KnowledgeServiceError,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -196,8 +200,14 @@ def _resume_value(
 class AgentService:
     """Synchronous adapter around the compiled graph and shared SQLite handles."""
 
-    def __init__(self, graph: CompiledGraph):
+    def __init__(
+        self,
+        graph: CompiledGraph,
+        *,
+        knowledge_service: KnowledgeLibraryService | None = None,
+    ):
         self.graph = graph
+        self.knowledge_service = knowledge_service
         # SqliteSaver/SqliteStore connections are shared for the lifespan.
         # Serialize graph calls in this minimal version to avoid concurrent use
         # of the same synchronous SQLite connections from worker threads.
@@ -209,9 +219,10 @@ class AgentService:
         message: str,
         thread_id: str,
         user_id: str,
+        knowledge_base_id: str | None = None,
     ) -> AgentExecutionResult:
         config = _config(thread_id)
-        context = AgentContext(user_id=user_id)
+        context = self._context(user_id, knowledge_base_id)
         with self._invoke_lock:
             snapshot = self.graph.get_state(config)
             self._verify_thread_owner(snapshot, user_id)
@@ -234,9 +245,10 @@ class AgentService:
         user_id: str,
         decision: Literal["approve", "reject", "retry", "cancel"],
         reason: str | None = None,
+        knowledge_base_id: str | None = None,
     ) -> AgentExecutionResult:
         config = _config(thread_id)
-        context = AgentContext(user_id=user_id)
+        context = self._context(user_id, knowledge_base_id)
         with self._invoke_lock:
             snapshot = self.graph.get_state(config)
             self._verify_thread_owner(snapshot, user_id)
@@ -257,6 +269,7 @@ class AgentService:
         message: str,
         thread_id: str,
         user_id: str,
+        knowledge_base_id: str | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         """Bridge the synchronous graph stream to an async SSE consumer."""
         send_stream, receive_stream = anyio.create_memory_object_stream[
@@ -270,6 +283,7 @@ class AgentService:
                     message=message,
                     thread_id=thread_id,
                     user_id=user_id,
+                    knowledge_base_id=knowledge_base_id,
                 ):
                     if stop_requested.is_set():
                         break
@@ -299,14 +313,15 @@ class AgentService:
         message: str,
         thread_id: str,
         user_id: str,
+        knowledge_base_id: str | None = None,
     ) -> Iterator[AgentStreamEvent]:
         """Execute Graph exactly once and expose only a safe public projection."""
         yield AgentStreamEvent("started", {"thread_id": thread_id})
         config = _config(thread_id)
-        context = AgentContext(user_id=user_id)
         token_buffers: dict[str, list[str]] = {"agent": [], "revise": []}
 
         try:
+            context = self._context(user_id, knowledge_base_id)
             with self._invoke_lock:
                 snapshot = self.graph.get_state(config)
                 self._verify_thread_owner(snapshot, user_id)
@@ -382,6 +397,15 @@ class AgentService:
                     "message": error.public_message,
                 },
             )
+        except KnowledgeServiceError as error:
+            yield AgentStreamEvent(
+                "error",
+                {
+                    "thread_id": thread_id,
+                    "code": "knowledge_base_not_found",
+                    "message": error.public_message,
+                },
+            )
         except Exception as error:
             logger.exception("LangGraph SSE stream failed", exc_info=error)
             yield AgentStreamEvent(
@@ -410,6 +434,27 @@ class AgentService:
         )
         if decision not in allowed:
             raise InvalidResumeDecisionError
+
+    def _context(
+        self,
+        user_id: str,
+        knowledge_base_id: str | None,
+    ) -> AgentContext:
+        if knowledge_base_id is not None:
+            if self.knowledge_service is None:
+                from ai_agent_learning.knowledge.service import (
+                    KnowledgeNotFoundError,
+                )
+
+                raise KnowledgeNotFoundError
+            self.knowledge_service.ensure_owned(
+                knowledge_base_id,
+                user_id,
+            )
+        return AgentContext(
+            user_id=user_id,
+            knowledge_base_id=knowledge_base_id,
+        )
 
     @staticmethod
     def _verify_thread_owner(snapshot: Any, user_id: str) -> None:

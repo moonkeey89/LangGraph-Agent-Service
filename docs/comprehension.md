@@ -2200,9 +2200,10 @@ metadata:
   → Memory Manager只处理用户消息，不保存知识库文档
 ```
 
-第一版`knowledge_base_id`来自Settings，在Graph创建时闭包注入。LLM可见的
-`search_knowledge_base`工具schema只有`query`，看不到也不能填写user_id或
-knowledge_base_id。默认检索3条，余弦相似度分数低于0.35的结果被丢弃；全部低于阈值
+命令行可以使用Settings中的默认`knowledge_base_id`；浏览器版本则由受控选择器传入，
+AgentService完成所有权校验后注入Runtime context。LLM可见的`search_knowledge_base`
+工具schema只有`query`，看不到也不能填写user_id或knowledge_base_id。默认检索3条，
+余弦相似度分数低于0.35的结果被丢弃；全部低于阈值
 时返回`no_evidence / 未找到可靠证据`，Knowledge Agent不会再调用LLM猜答案。
 
 文档内容被明确标记为不可执行证据。即使chunk中含有“忽略系统提示”“修改user_id”或
@@ -2215,3 +2216,56 @@ Knowledge Agent返回的`sources`来自实际检索结果，不由Supervisor自�
 `completed`事件都以向后兼容方式增加`sources`。SSE仅公开“正在检索知识库”和“已找到
 若干片段”，不会发送正文、向量、完整State或数据库路径。浏览器使用`textContent`
 显示文件名、页码和chunk ID。
+
+## 30. 浏览器知识库管理与上传
+
+加入管理页面后，Chroma仍然不是知识库“后台目录”。项目新增独立SQLite目录：
+
+```text
+data/knowledge_catalog.sqlite
+  knowledge_bases
+    knowledge_base_id, owner_user_id, name, description, created_at, updated_at
+  knowledge_documents
+    document_id, knowledge_base_id, original_filename, stored_filename,
+    content_hash, content_type, size, status, chunk_count, error_message,
+    created_at, updated_at
+```
+
+Chroma只保存可检索chunk和向量，`data/knowledge_sources/`只保存服务端受控命名的原始
+文件。三者组合后，系统才能回答“这个知识库是谁的、文件是否处理成功、源文件在哪里、
+哪些chunk可以检索”。目录状态不是从Chroma metadata反推。
+
+### Web上传调用链
+
+```text
+原生JavaScript FormData
+  → POST /api/v1/knowledge-bases/{id}/documents
+  → X-User-ID Dependency
+  → KnowledgeLibraryService验证所有权、数量、扩展名、Content-Type和文件签名
+  → 分块读取并限制实际字节数
+  → SHA-256 content_hash与服务端document_id
+  → 受控临时文件 → data/knowledge_sources/{kb}/{document_id}.{ext}
+  → SQLite状态processing
+  → KnowledgeIngestor（与CLI共用）
+  → Loader → Splitter → Embedding → Chroma upsert
+  → 成功：SQLite状态ready和chunk_count
+  → 失败：删除该document_id的chunk和源文件，SQLite状态failed
+```
+
+API路由不包含PDF解析、切分、Embedding或Chroma写入。同步工作通过线程池调用服务层，
+不会占用FastAPI事件循环。第一版HTTP会等待小文件索引完成，不提供后台任务队列或百分比。
+
+同一知识库内以`content_hash`判定完全重复内容；文件名相同但内容不同会生成不同文档。
+源文件名只用于展示，实际路径由服务端ID生成，`../`、绝对路径和同名文件都不能控制保存
+位置。删除文档按精确的`knowledge_base_id + document_id`删除Chroma chunk、目录记录和源
+文件；删除知识库前先验证所有者，再清理该知识库的全部文档，不使用LLM工具触发管理操作。
+
+### 动态知识库为什么仍然可信
+
+聊天请求新增可选`knowledge_base_id`，但它不是自然语言的一部分。AgentService先调用
+KnowledgeLibraryService验证它属于当前`X-User-ID`，再放进`AgentContext`。Knowledge
+Agent只能从可信Runtime context取得ID，工具schema仍只有`query`。不选择时context值为
+`None`，普通旅行、数学和对话流程保持原样。
+
+Retriever还会从SQLite目录取得`status=ready`的document_id列表，并在Chroma查询中同时
+过滤知识库ID和这些文档ID。processing或failed记录即使暂时存在chunk，也不会作为证据。

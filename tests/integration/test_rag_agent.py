@@ -79,10 +79,15 @@ class StubSubagent:
         self.agent_name = agent_name
         self.result = result
         self.tasks = []
+        self.contexts = []
 
     def invoke(self, task):
         self.tasks.append(task)
         return self.result
+
+    def invoke_with_context(self, task, context):
+        self.contexts.append(context)
+        return self.invoke(task)
 
 
 class RagAgentIntegrationTests(unittest.TestCase):
@@ -126,7 +131,10 @@ class RagAgentIntegrationTests(unittest.TestCase):
         return self.app.invoke(
             {"messages": [HumanMessage(content=message)]},
             config={"configurable": {"thread_id": thread_id}},
-            context=AgentContext(user_id="rag-user"),
+            context=AgentContext(
+                user_id="rag-user",
+                knowledge_base_id="selected_docs",
+            ),
         )
 
     def test_private_document_routes_to_knowledge_and_sources_are_real(self):
@@ -136,6 +144,10 @@ class RagAgentIntegrationTests(unittest.TestCase):
         ]
         self.assertEqual([item.name for item in tool_messages], ["ask_knowledge_agent"])
         self.assertEqual(len(self.knowledge.tasks), 1)
+        self.assertEqual(
+            self.knowledge.contexts[0].knowledge_base_id,
+            "selected_docs",
+        )
         response = AgentService._to_result(result, "rag-knowledge")
         self.assertEqual(response.sources[0].chunk_id, "chunk-real")
         self.assertEqual(response.sources[0].source, "manual.md")

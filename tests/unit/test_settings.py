@@ -33,6 +33,16 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.knowledge_chunk_overlap, 120)
         self.assertEqual(settings.knowledge_top_k, 3)
         self.assertEqual(settings.knowledge_relevance_threshold, 0.35)
+        self.assertEqual(
+            settings.knowledge_catalog_path.as_posix(),
+            "data/knowledge_catalog.sqlite",
+        )
+        self.assertEqual(
+            settings.knowledge_source_directory.as_posix(),
+            "data/knowledge_sources",
+        )
+        self.assertEqual(settings.knowledge_upload_max_file_size_mb, 10)
+        self.assertEqual(settings.knowledge_upload_max_files, 5)
         self.assertEqual(settings.log_level, "INFO")
         self.assertNotIn("test-secret-key", repr(settings))
 
@@ -52,6 +62,10 @@ class SettingsTests(unittest.TestCase):
             "KNOWLEDGE_CHUNK_OVERLAP": "80",
             "KNOWLEDGE_TOP_K": "4",
             "KNOWLEDGE_RELEVANCE_THRESHOLD": "0.45",
+            "KNOWLEDGE_CATALOG_PATH": "custom/catalog.sqlite",
+            "KNOWLEDGE_SOURCE_DIRECTORY": "custom/sources",
+            "KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB": "8",
+            "KNOWLEDGE_UPLOAD_MAX_FILES": "3",
             "LOG_LEVEL": "debug",
         }
 
@@ -74,6 +88,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.knowledge_chunk_overlap, 80)
         self.assertEqual(settings.knowledge_top_k, 4)
         self.assertEqual(settings.knowledge_relevance_threshold, 0.45)
+        self.assertEqual(settings.knowledge_upload_max_file_size_mb, 8)
+        self.assertEqual(settings.knowledge_upload_max_files, 3)
         self.assertEqual(settings.log_level, "DEBUG")
 
     def test_api_key_is_required(self):
@@ -120,6 +136,8 @@ class SettingsTests(unittest.TestCase):
             {"knowledge_chunk_size": 100, "knowledge_chunk_overlap": 100},
             {"knowledge_top_k": 0},
             {"knowledge_relevance_threshold": 1.1},
+            {"knowledge_upload_max_file_size_mb": 0},
+            {"knowledge_upload_max_files": 0},
         ]
         for values in invalid_values:
             with self.subTest(values=values):

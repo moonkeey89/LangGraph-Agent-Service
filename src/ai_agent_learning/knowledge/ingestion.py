@@ -52,11 +52,14 @@ class KnowledgeIngestor:
         path: Path,
         *,
         knowledge_base_id: str,
+        document_id: str | None = None,
+        source_name: str | None = None,
     ) -> IngestionResult:
         path = path.expanduser().resolve()
         knowledge_base_id = validate_knowledge_base_id(knowledge_base_id)
         documents = loader_for(path).load()
-        document_id = _document_id(knowledge_base_id, path)
+        document_id = document_id or _document_id(knowledge_base_id, path)
+        source_name = source_name or path.name
         chunks: list[KnowledgeChunk] = []
         chunk_sequence = 0
         for document in documents:
@@ -76,7 +79,7 @@ class KnowledgeIngestor:
                         content=content,
                         knowledge_base_id=knowledge_base_id,
                         document_id=document_id,
-                        source=path.name,
+                        source=source_name,
                         page=int(page) if page is not None else None,
                         chunk_id=chunk_id,
                     )
@@ -88,7 +91,7 @@ class KnowledgeIngestor:
         return IngestionResult(
             knowledge_base_id=knowledge_base_id,
             document_id=document_id,
-            source=path.name,
+            source=source_name,
             chunk_count=len(chunks),
             replaced_chunk_count=replaced,
         )

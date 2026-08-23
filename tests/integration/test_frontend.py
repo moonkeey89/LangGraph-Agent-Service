@@ -44,6 +44,11 @@ class FrontendIntegrationTests(unittest.TestCase):
         self.assertIn("response.body.getReader()", script.text)
         self.assertIn("renderSources", script.text)
         self.assertIn("message-sources", script.text)
+        self.assertIn("knowledge-view", page.text)
+        self.assertIn("knowledge-selector", page.text)
+        self.assertIn("/api/v1/knowledge-bases", script.text)
+        self.assertIn("FormData", script.text)
+        self.assertIn("dragover", script.text)
 
         self.assertEqual(parser.status_code, 200)
         self.assertIn("createSseParser", parser.text)
@@ -69,6 +74,7 @@ class FrontendIntegrationTests(unittest.TestCase):
         self.assertIn("/api/v1/agent/invoke", openapi["paths"])
         self.assertIn("/api/v1/agent/resume", openapi["paths"])
         self.assertIn("/api/v1/agent/stream", openapi["paths"])
+        self.assertIn("/api/v1/knowledge-bases", openapi["paths"])
 
     def test_frontend_uses_safe_text_rendering_and_no_secret(self):
         script = self.client.get("/assets/app.js").text

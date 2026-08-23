@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool, tool
 
 from ai_agent_learning.agent.error_recovery import classify_tool_error
+from ai_agent_learning.agent.context import AgentContext
 from ai_agent_learning.agents.subagent import SubagentResult
 from ai_agent_learning.knowledge import KnowledgeRetriever
 
@@ -36,7 +37,15 @@ class KnowledgeAgent:
     ):
         self.llm = llm
         self.knowledge_base_id = knowledge_base_id
+        self.retriever = retriever
         self.top_k = top_k
+        self.search_tool: BaseTool = self._tool_for(knowledge_base_id)
+        self.tools = (self.search_tool,)
+        self.tool_names = frozenset({self.search_tool.name})
+
+    def _tool_for(self, knowledge_base_id: str) -> BaseTool:
+        retriever = self.retriever
+        top_k = self.top_k
 
         @tool
         def search_knowledge_base(query: str) -> str:
@@ -48,11 +57,29 @@ class KnowledgeAgent:
             )
             return json.dumps(response.to_dict(), ensure_ascii=False)
 
-        self.search_tool: BaseTool = search_knowledge_base
-        self.tools = (self.search_tool,)
-        self.tool_names = frozenset({self.search_tool.name})
+        return search_knowledge_base
 
     def invoke(self, task: str) -> SubagentResult:
+        return self._invoke(task, self.knowledge_base_id)
+
+    def invoke_with_context(
+        self,
+        task: str,
+        context: AgentContext | None,
+    ) -> SubagentResult:
+        knowledge_base_id = getattr(context, "knowledge_base_id", None)
+        if knowledge_base_id is None:
+            return SubagentResult(
+                agent_name=self.agent_name,
+                status="success",
+                result="当前请求未选择知识库，无法执行私有文档检索。",
+                error=None,
+                retry_recommended=False,
+                sources=[],
+            )
+        return self._invoke(task, knowledge_base_id)
+
+    def _invoke(self, task: str, knowledge_base_id: str) -> SubagentResult:
         normalized_task = task.strip()
         if not normalized_task:
             return SubagentResult(
@@ -63,7 +90,8 @@ class KnowledgeAgent:
                 retry_recommended=False,
             )
         try:
-            raw_evidence = self.search_tool.invoke({"query": normalized_task})
+            search_tool = self._tool_for(knowledge_base_id)
+            raw_evidence = search_tool.invoke({"query": normalized_task})
             evidence = json.loads(str(raw_evidence))
             if evidence.get("status") != "found":
                 return SubagentResult(

@@ -9,3 +9,4 @@ dist/
 data/*.sqlite
 data/*.sqlite-*
 data/knowledge_chroma/
+data/knowledge_sources/

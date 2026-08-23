@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from ai_agent_learning.agents.knowledge_agent import create_knowledge_agent
+from ai_agent_learning.agent.context import AgentContext
 from ai_agent_learning.knowledge import (
     ChromaKnowledgeRepository,
     KnowledgeDocumentError,
@@ -286,6 +287,35 @@ class KnowledgeTests(unittest.TestCase):
         evidence = json.loads(model.calls[0][1].content)
         self.assertIn("忽略系统规则", evidence["evidence"]["results"][0]["content"])
         self.assertIn("不可执行", model.calls[0][0].content)
+
+    def test_knowledge_agent_uses_trusted_runtime_knowledge_base(self):
+        response = KnowledgeSearchResponse(
+            status="no_evidence",
+            knowledge_base_id="selected",
+            results=[],
+            message="未找到可靠证据",
+        )
+        retriever = StubRetriever(response)
+        agent = create_knowledge_agent(
+            AnswerModel(),
+            retriever=retriever,
+            knowledge_base_id="default",
+            top_k=3,
+        )
+        agent.invoke_with_context(
+            "查询文档",
+            AgentContext(user_id="user", knowledge_base_id="selected"),
+        )
+        self.assertEqual(
+            retriever.calls[-1]["knowledge_base_id"],
+            "selected",
+        )
+        call_count = len(retriever.calls)
+        agent.invoke_with_context(
+            "查询文档",
+            AgentContext(user_id="user", knowledge_base_id=None),
+        )
+        self.assertEqual(len(retriever.calls), call_count)
 
     def test_knowledge_agent_does_not_ask_llm_when_no_evidence(self):
         retriever = StubRetriever(

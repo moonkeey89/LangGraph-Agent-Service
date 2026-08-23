@@ -162,20 +162,42 @@ http://127.0.0.1:8000/
 ```powershell
 .venv\Scripts\python -m ai_agent_learning.knowledge.cli `
   examples\knowledge\demo_agent_handbook.md `
-  --knowledge-base-id demo
+  --knowledge-base-id demo `
+  --owner-user-id moon
 ```
 
 入库只在命令执行时解析和切分文档，用户提问时不会重新读取全部文件。默认数据写入
-`data/knowledge_chroma/`，该目录不会提交Git。随后重启FastAPI并在网页询问：
+`data/knowledge_chroma/`，管理目录写入`data/knowledge_catalog.sqlite`，受控源文件写入
+`data/knowledge_sources/`；这些运行数据都不会提交Git。CLI和网页上传调用同一个
+`KnowledgeLibraryService → KnowledgeIngestor`。如果项目中已有升级前直接写入Chroma的
+文档，需要重新执行一次入库命令，目录表登记为`ready`后才能被在线检索。
+
+浏览器访问首页后，可以进入“知识库”页新建知识库、拖拽上传TXT/Markdown/PDF、查看
+状态和删除文档。回到“对话”页，在“本轮知识库”中选择当前用户拥有的知识库后再提问：
 
 ```text
 根据内部手册，星河项目的内部代号是什么？
 ```
 
 正确答案应包含演示文档中的唯一事实`ORBIT-731`，回答下方显示实际文件来源。当前
-Knowledge Agent使用Settings中的`KNOWLEDGE_BASE_ID=demo`，自然语言不能修改这个ID。
+浏览器把选择的ID作为受控请求字段发送，后端会再次检查该知识库属于`X-User-ID`；
+自然语言和LLM都不能修改所有者或绕过检查。未选择知识库时不会强制执行RAG。
 同一文档再次入库会使用稳定document/chunk ID进行upsert，并删除该文档已失效的旧
 chunk；修改文档后直接重复同一命令即可完成重新索引。
+
+知识库管理接口包括：
+
+```text
+POST   /api/v1/knowledge-bases
+GET    /api/v1/knowledge-bases
+GET    /api/v1/knowledge-bases/{knowledge_base_id}
+DELETE /api/v1/knowledge-bases/{knowledge_base_id}
+POST   /api/v1/knowledge-bases/{knowledge_base_id}/documents
+GET    /api/v1/knowledge-bases/{knowledge_base_id}/documents
+DELETE /api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}
+```
+
+`X-User-ID`仍然只是教学阶段的模拟身份，不是真实认证。
 
 程序启动后依次输入用户 ID 和会话 ID；直接回车分别使用 `default_user` 和 `default`。`thread_id` 定位 Checkpoint 会话，`user_id` 定位跨会话长期记忆。同一用户更换 thread 后不会自动继承旧消息，但仍可检索自己已保存且有效的长期事实。输入 `exit` 或 `quit` 退出。
 

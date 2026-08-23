@@ -17,10 +17,14 @@ class Settings(BaseSettings):
     supervisor_max_subagent_calls: int = 4
     knowledge_base_id: str = "demo"
     knowledge_chroma_directory: Path = Path("data/knowledge_chroma")
+    knowledge_catalog_path: Path = Path("data/knowledge_catalog.sqlite")
+    knowledge_source_directory: Path = Path("data/knowledge_sources")
     knowledge_chunk_size: int = 800
     knowledge_chunk_overlap: int = 120
     knowledge_top_k: int = 3
     knowledge_relevance_threshold: float | None = 0.35
+    knowledge_upload_max_file_size_mb: int = 10
+    knowledge_upload_max_files: int = 5
     log_level: str = "INFO"
 
     @field_validator("memory_embedding_dimensions")
@@ -49,7 +53,12 @@ class Settings(BaseSettings):
     def validate_default_knowledge_base_id(cls, value: str) -> str:
         return validate_knowledge_base_id(value)
 
-    @field_validator("knowledge_chunk_size", "knowledge_top_k")
+    @field_validator(
+        "knowledge_chunk_size",
+        "knowledge_top_k",
+        "knowledge_upload_max_file_size_mb",
+        "knowledge_upload_max_files",
+    )
     @classmethod
     def validate_positive_knowledge_integer(cls, value: int) -> int:
         if value <= 0:

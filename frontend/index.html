@@ -23,6 +23,12 @@
         </a>
       </header>
 
+      <nav class="main-nav" aria-label="主导航">
+        <button id="nav-chat" class="nav-button active" type="button">对话</button>
+        <button id="nav-knowledge" class="nav-button" type="button">知识库</button>
+      </nav>
+
+      <section id="chat-view" class="view active">
       <section class="session-panel" aria-label="会话信息">
         <label class="field user-field">
           <span>开发用户 ID</span>
@@ -39,6 +45,13 @@
           <span>当前 thread_id</span>
           <code id="thread-id"></code>
         </div>
+
+        <label class="field knowledge-select-field">
+          <span>本轮知识库</span>
+          <select id="knowledge-selector">
+            <option value="">不使用知识库</option>
+          </select>
+        </label>
 
         <button id="new-session" class="secondary-button" type="button">
           新建会话
@@ -75,9 +88,96 @@
           </div>
         </form>
       </section>
+      </section>
+
+      <section id="knowledge-view" class="view knowledge-view" hidden>
+        <aside class="knowledge-sidebar">
+          <div class="knowledge-sidebar-heading">
+            <div>
+              <p class="eyebrow">MY KNOWLEDGE BASES</p>
+              <h2>知识库</h2>
+            </div>
+            <button id="show-create-kb" class="primary-button compact" type="button">
+              新建
+            </button>
+          </div>
+
+          <form id="create-kb-form" class="create-kb-form" hidden>
+            <label class="field">
+              <span>名称</span>
+              <input id="kb-name" maxlength="100" required />
+            </label>
+            <label class="field">
+              <span>描述</span>
+              <textarea id="kb-description" maxlength="1000" rows="3"></textarea>
+            </label>
+            <div class="inline-actions">
+              <button class="primary-button compact" type="submit">创建</button>
+              <button id="cancel-create-kb" class="secondary-button compact" type="button">取消</button>
+            </div>
+          </form>
+
+          <div id="knowledge-base-list" class="knowledge-base-list"></div>
+        </aside>
+
+        <section class="knowledge-detail" aria-live="polite">
+          <div id="knowledge-empty" class="knowledge-empty">
+            请选择或新建一个知识库。
+          </div>
+
+          <div id="knowledge-content" hidden>
+            <header class="knowledge-detail-heading">
+              <div>
+                <p class="eyebrow">SELECTED KNOWLEDGE BASE</p>
+                <h2 id="selected-kb-name"></h2>
+                <p id="selected-kb-description" class="subtitle"></p>
+                <p id="selected-kb-stats" class="knowledge-stats"></p>
+              </div>
+              <button id="delete-kb" class="danger-button" type="button">
+                删除知识库
+              </button>
+            </header>
+
+            <section
+              id="upload-zone"
+              class="upload-zone"
+              tabindex="0"
+              role="button"
+              aria-label="选择或拖拽文档上传"
+            >
+              <input
+                id="document-files"
+                type="file"
+                accept=".txt,.md,.markdown,.pdf"
+                multiple
+                hidden
+              />
+              <strong>点击选择或拖拽文档到这里</strong>
+              <span>支持 TXT、Markdown、PDF；单文件默认最大 10MB，一次最多 5 个。</span>
+            </section>
+            <p id="upload-status" class="upload-status" aria-live="polite"></p>
+
+            <div class="document-table-wrap">
+              <table class="document-table">
+                <thead>
+                  <tr>
+                    <th>文件名</th>
+                    <th>状态</th>
+                    <th>大小</th>
+                    <th>Chunks</th>
+                    <th>上传时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="document-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </section>
 
       <footer>
-        停止按钮只会中断浏览器继续读取，不保证撤销服务器已经执行的工具或副作用。
+        X-User-ID 只是开发阶段身份模拟。停止按钮只中断浏览器读取，不保证撤销服务器副作用。
       </footer>
     </main>
 

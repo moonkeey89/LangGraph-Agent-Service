@@ -81,3 +81,31 @@ class IngestionResult:
     chunk_count: int
     replaced_chunk_count: int
 
+
+DocumentStatus = Literal["processing", "ready", "failed"]
+
+
+@dataclass(frozen=True)
+class KnowledgeBaseRecord:
+    knowledge_base_id: str
+    owner_user_id: str
+    name: str
+    description: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class KnowledgeDocumentRecord:
+    document_id: str
+    knowledge_base_id: str
+    original_filename: str
+    stored_filename: str | None
+    content_hash: str
+    content_type: str
+    size: int
+    status: DocumentStatus
+    chunk_count: int
+    error_message: str | None
+    created_at: str
+    updated_at: str

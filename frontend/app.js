@@ -2,6 +2,7 @@ import { createSseParser, runSseParserSelfTests } from "/assets/sse-parser.js";
 
 const STORAGE_USER_ID = "ai-agent-learning.user-id";
 const STORAGE_THREAD_ID = "ai-agent-learning.thread-id";
+const STORAGE_KNOWLEDGE_BASE_ID = "ai-agent-learning.knowledge-base-id";
 
 const elements = {
   userId: document.querySelector("#user-id"),
@@ -13,7 +14,28 @@ const elements = {
   send: document.querySelector("#send-button"),
   stop: document.querySelector("#stop-button"),
   statusText: document.querySelector("#status-text"),
-  statusDot: document.querySelector("#status-dot")
+  statusDot: document.querySelector("#status-dot"),
+  navChat: document.querySelector("#nav-chat"),
+  navKnowledge: document.querySelector("#nav-knowledge"),
+  chatView: document.querySelector("#chat-view"),
+  knowledgeView: document.querySelector("#knowledge-view"),
+  knowledgeSelector: document.querySelector("#knowledge-selector"),
+  showCreateKb: document.querySelector("#show-create-kb"),
+  cancelCreateKb: document.querySelector("#cancel-create-kb"),
+  createKbForm: document.querySelector("#create-kb-form"),
+  kbName: document.querySelector("#kb-name"),
+  kbDescription: document.querySelector("#kb-description"),
+  knowledgeBaseList: document.querySelector("#knowledge-base-list"),
+  knowledgeEmpty: document.querySelector("#knowledge-empty"),
+  knowledgeContent: document.querySelector("#knowledge-content"),
+  selectedKbName: document.querySelector("#selected-kb-name"),
+  selectedKbDescription: document.querySelector("#selected-kb-description"),
+  selectedKbStats: document.querySelector("#selected-kb-stats"),
+  deleteKb: document.querySelector("#delete-kb"),
+  uploadZone: document.querySelector("#upload-zone"),
+  documentFiles: document.querySelector("#document-files"),
+  uploadStatus: document.querySelector("#upload-status"),
+  documentTableBody: document.querySelector("#document-table-body")
 };
 
 const state = {
@@ -24,7 +46,11 @@ const state = {
   assistantMessage: null,
   progressMessage: null,
   receivedToken: false,
-  terminalReceived: false
+  terminalReceived: false,
+  knowledgeBases: [],
+  selectedKnowledgeBaseId: localStorage.getItem(STORAGE_KNOWLEDGE_BASE_ID) || "",
+  knowledgeDocuments: [],
+  knowledgeBusy: false
 };
 
 function generateThreadId() {
@@ -47,6 +73,217 @@ function currentUserId() {
   return elements.userId.value.trim();
 }
 
+function knowledgeHeaders(extra = {}) {
+  return { "X-User-ID": currentUserId(), ...extra };
+}
+
+function selectedKnowledgeBase() {
+  return state.knowledgeBases.find(
+    (item) => item.knowledge_base_id === state.selectedKnowledgeBaseId
+  ) || null;
+}
+
+function setView(name) {
+  const chat = name === "chat";
+  elements.chatView.hidden = !chat;
+  elements.knowledgeView.hidden = chat;
+  elements.navChat.classList.toggle("active", chat);
+  elements.navKnowledge.classList.toggle("active", !chat);
+  if (!chat) {
+    void loadKnowledgeBases();
+  }
+}
+
+function setSelectedKnowledgeBase(knowledgeBaseId, { loadDocuments = true } = {}) {
+  const previous = state.selectedKnowledgeBaseId;
+  const exists = state.knowledgeBases.some(
+    (item) => item.knowledge_base_id === knowledgeBaseId
+  );
+  state.selectedKnowledgeBaseId = exists ? knowledgeBaseId : "";
+  if (previous !== state.selectedKnowledgeBaseId) {
+    state.knowledgeDocuments = [];
+  }
+  localStorage.setItem(STORAGE_KNOWLEDGE_BASE_ID, state.selectedKnowledgeBaseId);
+  elements.knowledgeSelector.value = state.selectedKnowledgeBaseId;
+  renderKnowledgeBaseList();
+  renderKnowledgeDetail();
+  if (loadDocuments && state.selectedKnowledgeBaseId) {
+    void loadKnowledgeDocuments();
+  }
+}
+
+function renderKnowledgeSelector() {
+  const selected = state.selectedKnowledgeBaseId;
+  elements.knowledgeSelector.replaceChildren();
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "不使用知识库";
+  elements.knowledgeSelector.append(empty);
+  for (const item of state.knowledgeBases) {
+    const option = document.createElement("option");
+    option.value = item.knowledge_base_id;
+    option.textContent = item.name;
+    elements.knowledgeSelector.append(option);
+  }
+  elements.knowledgeSelector.value = state.knowledgeBases.some(
+    (item) => item.knowledge_base_id === selected
+  ) ? selected : "";
+}
+
+function renderKnowledgeBaseList() {
+  elements.knowledgeBaseList.replaceChildren();
+  if (state.knowledgeBases.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "subtitle";
+    empty.textContent = "当前用户还没有知识库。";
+    elements.knowledgeBaseList.append(empty);
+    return;
+  }
+  for (const item of state.knowledgeBases) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "knowledge-base-item";
+    button.classList.toggle(
+      "active",
+      item.knowledge_base_id === state.selectedKnowledgeBaseId
+    );
+    const name = document.createElement("strong");
+    name.textContent = item.name;
+    const description = document.createElement("span");
+    description.textContent = item.description || item.knowledge_base_id;
+    button.append(name, description);
+    button.addEventListener("click", () => {
+      setSelectedKnowledgeBase(item.knowledge_base_id);
+    });
+    elements.knowledgeBaseList.append(button);
+  }
+}
+
+function renderKnowledgeDetail() {
+  const current = selectedKnowledgeBase();
+  elements.knowledgeEmpty.hidden = current !== null;
+  elements.knowledgeContent.hidden = current === null;
+  if (!current) {
+    elements.documentTableBody.replaceChildren();
+    return;
+  }
+  elements.selectedKbName.textContent = current.name;
+  elements.selectedKbDescription.textContent = current.description || "暂无描述";
+  const ready = state.knowledgeDocuments.filter((item) => item.status === "ready").length;
+  elements.selectedKbStats.textContent = `知识库ID：${current.knowledge_base_id}；文档 ${state.knowledgeDocuments.length}，可检索 ${ready}`;
+}
+
+function formatBytes(size) {
+  if (!Number.isFinite(size)) return "-";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString();
+}
+
+function renderDocuments() {
+  elements.documentTableBody.replaceChildren();
+  if (state.knowledgeDocuments.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.textContent = "还没有文档。";
+    row.append(cell);
+    elements.documentTableBody.append(row);
+    renderKnowledgeDetail();
+    return;
+  }
+  const labels = { processing: "处理中", ready: "可检索", failed: "失败" };
+  for (const item of state.knowledgeDocuments) {
+    const row = document.createElement("tr");
+    const filename = document.createElement("td");
+    const filenameText = document.createElement("span");
+    filenameText.textContent = item.original_filename;
+    filename.append(filenameText);
+    if (item.error_message) {
+      const errorText = document.createElement("small");
+      errorText.className = "document-error";
+      errorText.textContent = item.error_message;
+      filename.append(errorText);
+    }
+    const status = document.createElement("td");
+    const badge = document.createElement("span");
+    badge.className = `document-status ${item.status}`;
+    badge.textContent = labels[item.status] || item.status;
+    status.append(badge);
+    const size = document.createElement("td");
+    size.textContent = formatBytes(item.size);
+    const chunks = document.createElement("td");
+    chunks.textContent = String(item.chunk_count);
+    const created = document.createElement("td");
+    created.textContent = formatDate(item.created_at);
+    const action = document.createElement("td");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "table-delete";
+    remove.textContent = "删除";
+    remove.addEventListener("click", () => void deleteDocument(item));
+    action.append(remove);
+    row.append(filename, status, size, chunks, created, action);
+    elements.documentTableBody.append(row);
+  }
+  renderKnowledgeDetail();
+}
+
+async function loadKnowledgeBases() {
+  const userId = currentUserId();
+  if (!userId) return;
+  try {
+    const response = await fetch("/api/v1/knowledge-bases", {
+      headers: knowledgeHeaders()
+    });
+    const items = await readJsonResponse(response);
+    state.knowledgeBases = Array.isArray(items) ? items : [];
+    if (!state.knowledgeBases.some(
+      (item) => item.knowledge_base_id === state.selectedKnowledgeBaseId
+    )) {
+      state.selectedKnowledgeBaseId = "";
+      state.knowledgeDocuments = [];
+      localStorage.setItem(STORAGE_KNOWLEDGE_BASE_ID, "");
+    }
+    renderKnowledgeSelector();
+    renderKnowledgeBaseList();
+    renderKnowledgeDetail();
+    if (state.selectedKnowledgeBaseId) await loadKnowledgeDocuments();
+  } catch (error) {
+    showKnowledgeError(error);
+  }
+}
+
+async function loadKnowledgeDocuments() {
+  const knowledgeBaseId = state.selectedKnowledgeBaseId;
+  if (!knowledgeBaseId) return;
+  try {
+    const response = await fetch(
+      `/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`,
+      { headers: knowledgeHeaders() }
+    );
+    const items = await readJsonResponse(response);
+    if (knowledgeBaseId !== state.selectedKnowledgeBaseId) return;
+    state.knowledgeDocuments = Array.isArray(items) ? items : [];
+    renderDocuments();
+  } catch (error) {
+    showKnowledgeError(error);
+  }
+}
+
+function showKnowledgeError(error) {
+  const detail = error instanceof HttpError && typeof error.payload?.detail === "string"
+    ? error.payload.detail
+    : humanError(error);
+  elements.uploadStatus.textContent = detail;
+  elements.uploadStatus.dataset.kind = "error";
+}
+
 function setStatus(text, kind = "idle") {
   elements.statusText.textContent = text;
   elements.statusDot.dataset.kind = kind;
@@ -58,6 +295,7 @@ function updateControls() {
   elements.input.disabled = state.busy || state.pendingApproval;
   elements.userId.disabled = state.busy || state.pendingApproval;
   elements.newSession.disabled = state.busy;
+  elements.knowledgeSelector.disabled = state.busy || state.pendingApproval;
 }
 
 function setBusy(busy) {
@@ -246,6 +484,7 @@ async function submitApproval(decision, card, buttons) {
       body: JSON.stringify({
         thread_id: state.threadId,
         decision,
+        knowledge_base_id: state.selectedKnowledgeBaseId || null,
         reason: decision === "reject" || decision === "cancel" ? "用户在页面中拒绝" : null
       })
     });
@@ -323,6 +562,8 @@ function humanStreamError(data) {
       return "这是没有网页用户归属的旧线程，不能自动认领。请点击“新建会话”。";
     case "pending_interrupt":
       return "当前会话仍有待审批操作。请先完成审批，或点击“新建会话”。";
+    case "knowledge_base_not_found":
+      return "所选知识库不存在或不属于当前用户，请刷新知识库列表后重试。";
     case "request_rejected":
       return "本次请求被安全策略拒绝，请检查会话状态。";
     default:
@@ -372,7 +613,11 @@ async function readAgentStream(message, signal) {
       "Content-Type": "application/json",
       "X-User-ID": currentUserId()
     },
-    body: JSON.stringify({ message, thread_id: state.threadId }),
+    body: JSON.stringify({
+      message,
+      thread_id: state.threadId,
+      knowledge_base_id: state.selectedKnowledgeBaseId || null
+    }),
     signal
   });
 
@@ -458,6 +703,117 @@ function startNewSession() {
   updateControls();
 }
 
+async function createKnowledgeBase(event) {
+  event.preventDefault();
+  if (state.knowledgeBusy) return;
+  const name = elements.kbName.value.trim();
+  if (!name) return;
+  state.knowledgeBusy = true;
+  try {
+    const response = await fetch("/api/v1/knowledge-bases", {
+      method: "POST",
+      headers: knowledgeHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        name,
+        description: elements.kbDescription.value.trim()
+      })
+    });
+    const created = await readJsonResponse(response);
+    elements.createKbForm.reset();
+    elements.createKbForm.hidden = true;
+    await loadKnowledgeBases();
+    setSelectedKnowledgeBase(created.knowledge_base_id);
+  } catch (error) {
+    showKnowledgeError(error);
+  } finally {
+    state.knowledgeBusy = false;
+  }
+}
+
+async function uploadFiles(fileList) {
+  if (state.knowledgeBusy || !state.selectedKnowledgeBaseId) return;
+  const files = Array.from(fileList || []);
+  if (files.length === 0) return;
+  state.knowledgeBusy = true;
+  elements.uploadStatus.dataset.kind = "working";
+  elements.uploadStatus.textContent = "正在上传；服务器随后会解析文档、生成向量并建立索引……";
+  const data = new FormData();
+  for (const file of files) data.append("files", file, file.name);
+  try {
+    const response = await fetch(
+      `/api/v1/knowledge-bases/${encodeURIComponent(state.selectedKnowledgeBaseId)}/documents`,
+      {
+        method: "POST",
+        headers: knowledgeHeaders(),
+        body: data
+      }
+    );
+    const result = await readJsonResponse(response);
+    const duplicates = Array.isArray(result.items)
+      ? result.items.filter((item) => item.duplicate).length
+      : 0;
+    const failures = Array.isArray(result.items)
+      ? result.items.filter((item) => item.document?.status === "failed").length
+      : 0;
+    elements.uploadStatus.dataset.kind = failures ? "error" : "success";
+    elements.uploadStatus.textContent = failures
+      ? `入库完成，但有 ${failures} 个文件解析或索引失败。`
+      : `入库完成${duplicates ? `；跳过 ${duplicates} 个重复文档` : ""}。`;
+    await loadKnowledgeDocuments();
+  } catch (error) {
+    showKnowledgeError(error);
+  } finally {
+    state.knowledgeBusy = false;
+    elements.documentFiles.value = "";
+  }
+}
+
+async function deleteDocument(documentRecord) {
+  if (state.knowledgeBusy) return;
+  const confirmed = globalThis.confirm(
+    `确定删除“${documentRecord.original_filename}”吗？其全部检索片段和源文件都会删除。`
+  );
+  if (!confirmed) return;
+  state.knowledgeBusy = true;
+  try {
+    const response = await fetch(
+      `/api/v1/knowledge-bases/${encodeURIComponent(state.selectedKnowledgeBaseId)}/documents/${encodeURIComponent(documentRecord.document_id)}`,
+      { method: "DELETE", headers: knowledgeHeaders() }
+    );
+    if (!response.ok) await readJsonResponse(response);
+    await loadKnowledgeDocuments();
+  } catch (error) {
+    showKnowledgeError(error);
+  } finally {
+    state.knowledgeBusy = false;
+  }
+}
+
+async function deleteKnowledgeBase() {
+  const current = selectedKnowledgeBase();
+  if (!current || state.knowledgeBusy) return;
+  const confirmed = globalThis.confirm(
+    `确定删除知识库“${current.name}”吗？这会删除其中全部文档、向量片段和受控源文件。`
+  );
+  if (!confirmed) return;
+  state.knowledgeBusy = true;
+  try {
+    const response = await fetch(
+      `/api/v1/knowledge-bases/${encodeURIComponent(current.knowledge_base_id)}`,
+      { method: "DELETE", headers: knowledgeHeaders() }
+    );
+    if (!response.ok) await readJsonResponse(response);
+    state.selectedKnowledgeBaseId = "";
+    state.knowledgeDocuments = [];
+    localStorage.setItem(STORAGE_KNOWLEDGE_BASE_ID, "");
+    await loadKnowledgeBases();
+  } catch (error) {
+    showKnowledgeError(error);
+  } finally {
+    state.knowledgeBusy = false;
+  }
+}
+
 elements.form.addEventListener("submit", (event) => {
   event.preventDefault();
   if (state.busy || state.pendingApproval) {
@@ -492,6 +848,50 @@ elements.stop.addEventListener("click", () => {
 
 elements.newSession.addEventListener("click", startNewSession);
 
+elements.navChat.addEventListener("click", () => setView("chat"));
+elements.navKnowledge.addEventListener("click", () => setView("knowledge"));
+elements.knowledgeSelector.addEventListener("change", () => {
+  setSelectedKnowledgeBase(elements.knowledgeSelector.value);
+});
+elements.showCreateKb.addEventListener("click", () => {
+  elements.createKbForm.hidden = false;
+  elements.kbName.focus();
+});
+elements.cancelCreateKb.addEventListener("click", () => {
+  elements.createKbForm.reset();
+  elements.createKbForm.hidden = true;
+});
+elements.createKbForm.addEventListener("submit", createKnowledgeBase);
+elements.deleteKb.addEventListener("click", () => void deleteKnowledgeBase());
+elements.uploadZone.addEventListener("click", () => elements.documentFiles.click());
+elements.uploadZone.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    elements.documentFiles.click();
+  }
+});
+elements.documentFiles.addEventListener("change", () => {
+  void uploadFiles(elements.documentFiles.files);
+});
+elements.documentFiles.addEventListener("click", (event) => {
+  event.stopPropagation();
+});
+for (const eventName of ["dragenter", "dragover"]) {
+  elements.uploadZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    elements.uploadZone.classList.add("dragging");
+  });
+}
+for (const eventName of ["dragleave", "drop"]) {
+  elements.uploadZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    elements.uploadZone.classList.remove("dragging");
+  });
+}
+elements.uploadZone.addEventListener("drop", (event) => {
+  void uploadFiles(event.dataTransfer?.files);
+});
+
 elements.userId.addEventListener("change", () => {
   const userId = currentUserId();
   if (!userId) {
@@ -500,7 +900,12 @@ elements.userId.addEventListener("change", () => {
   const previous = localStorage.getItem(STORAGE_USER_ID);
   localStorage.setItem(STORAGE_USER_ID, userId);
   if (previous && previous !== userId) {
+    state.knowledgeBases = [];
+    state.knowledgeDocuments = [];
+    state.selectedKnowledgeBaseId = "";
+    localStorage.setItem(STORAGE_KNOWLEDGE_BASE_ID, "");
     startNewSession();
+    void loadKnowledgeBases();
   }
 });
 
@@ -511,6 +916,7 @@ function bootstrap() {
   elements.threadId.textContent = state.threadId;
   addSystemMessage("页面已就绪。刷新会保留用户和 thread 标识，但不会自动重新渲染历史消息。");
   updateControls();
+  void loadKnowledgeBases();
 
   try {
     const passed = runSseParserSelfTests();
