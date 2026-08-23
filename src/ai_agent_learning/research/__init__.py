@@ -6,6 +6,12 @@ from ai_agent_learning.research.catalog import (
     resolve_researchflow_path,
 )
 from ai_agent_learning.research.graph import build_research_graph
+from ai_agent_learning.research.execution import (
+    RESEARCH_CHECKPOINT_NAMESPACE,
+    ResearchExecutionError,
+    ResearchExecutionResult,
+    ResearchExecutionService,
+)
 from ai_agent_learning.research.graph_state import (
     ResearchContext,
     ResearchEvidence,
@@ -16,6 +22,7 @@ from ai_agent_learning.research.graph_state import (
 )
 from ai_agent_learning.research.models import (
     AgentRun,
+    AgentRunOutcome,
     AgentRunStatus,
     ArtifactSource,
     ResearchArtifact,
@@ -64,6 +71,7 @@ __all__ = [
     "AgentRun",
     "AgentRunConflictError",
     "AgentRunNotFoundError",
+    "AgentRunOutcome",
     "AgentRunStatus",
     "AgentRunValidationError",
     "CURRENT_SCHEMA_VERSION",
@@ -83,6 +91,9 @@ __all__ = [
     "ResearchCriticDecision",
     "ResearchEvidence",
     "ResearchEvidenceAgent",
+    "ResearchExecutionError",
+    "ResearchExecutionResult",
+    "ResearchExecutionService",
     "ResearchKnowledgeBaseNotFoundError",
     "ResearchPersistenceError",
     "ResearchProject",
@@ -100,6 +111,7 @@ __all__ = [
     "ResearchState",
     "ResearchSupervisor",
     "ResearchSynthesizer",
+    "RESEARCH_CHECKPOINT_NAMESPACE",
     "ResearchTask",
     "ResearchTaskConflictError",
     "ResearchTaskNotFoundError",

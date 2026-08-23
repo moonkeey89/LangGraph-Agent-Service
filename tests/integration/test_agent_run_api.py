@@ -144,10 +144,9 @@ class AgentRunApiTests(unittest.TestCase):
             404,
         )
 
-    def test_run_routes_are_read_only(self):
+    def test_run_detail_routes_remain_read_only(self):
         detail_path = f"{self.list_path}/{self.run.run_id}"
         for method, path in (
-            ("post", self.list_path),
             ("patch", detail_path),
             ("delete", detail_path),
         ):
@@ -167,7 +166,7 @@ class AgentRunApiTests(unittest.TestCase):
             "/api/v1/research/projects/{project_id}/tasks/{task_id}/runs"
         )
         detail_template = f"{list_template}/{{run_id}}"
-        self.assertEqual(set(schema["paths"][list_template]), {"get"})
+        self.assertEqual(set(schema["paths"][list_template]), {"get", "post"})
         self.assertEqual(set(schema["paths"][detail_template]), {"get"})
 
 

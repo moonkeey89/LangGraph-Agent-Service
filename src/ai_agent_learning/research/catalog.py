@@ -17,7 +17,13 @@ from ai_agent_learning.research.models import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RESEARCHFLOW_DB_PATH = PROJECT_ROOT / "data" / "researchflow.sqlite"
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
+
+
+class ActiveAgentRunError(RuntimeError):
+    def __init__(self, run_id: str):
+        super().__init__(run_id)
+        self.run_id = run_id
 
 
 def resolve_researchflow_path(path: Path) -> Path:
@@ -232,6 +238,52 @@ class ResearchCatalog:
                     """,
                     (4, _now()),
                 )
+            if 5 not in applied_versions:
+                self.connection.execute(
+                    """
+                    ALTER TABLE agent_runs
+                    RENAME COLUMN final_artifact_id TO output_artifact_id
+                    """
+                )
+                self.connection.execute(
+                    """
+                    ALTER TABLE agent_runs ADD COLUMN outcome TEXT CHECK (
+                        outcome IS NULL OR outcome IN (
+                            'completed', 'blocked', 'failed', 'needs_review'
+                        )
+                    )
+                    """
+                )
+                self.connection.execute(
+                    """
+                    ALTER TABLE research_artifacts ADD COLUMN origin_run_id TEXT
+                        REFERENCES agent_runs(run_id) ON DELETE RESTRICT
+                    """
+                )
+                self.connection.execute(
+                    "DROP INDEX IF EXISTS idx_agent_runs_final_artifact"
+                )
+                self.connection.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_agent_runs_output_artifact
+                        ON agent_runs(output_artifact_id)
+                    """
+                )
+                self.connection.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS
+                        idx_research_artifacts_origin_run
+                    ON research_artifacts(origin_run_id)
+                    WHERE origin_run_id IS NOT NULL
+                    """
+                )
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+                    VALUES (?, ?)
+                    """,
+                    (5, _now()),
+                )
 
     def create(self, project: ResearchProject) -> ResearchProject:
         with self._lock, self.connection:
@@ -375,7 +427,7 @@ class ResearchCatalog:
                 """
                 SELECT 1 FROM agent_runs AS runs
                 JOIN research_tasks AS tasks ON tasks.task_id = runs.task_id
-                WHERE tasks.project_id = ? AND runs.final_artifact_id = ?
+                WHERE tasks.project_id = ? AND runs.output_artifact_id = ?
                 LIMIT 1
                 """,
                 (project_id, artifact_id),
@@ -480,9 +532,9 @@ class ResearchCatalog:
                 """
                 INSERT INTO research_artifacts (
                     artifact_id, project_id, task_id, title, artifact_type,
-                    content, status, created_by, sources, created_at,
-                    updated_at, finalized_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    content, status, created_by, sources, origin_run_id,
+                    created_at, updated_at, finalized_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     artifact.artifact_id,
@@ -494,6 +546,7 @@ class ResearchCatalog:
                     artifact.status,
                     artifact.created_by,
                     _serialize_sources(artifact.sources),
+                    artifact.origin_run_id,
                     artifact.created_at,
                     artifact.updated_at,
                     artifact.finalized_at,
@@ -541,6 +594,19 @@ class ResearchCatalog:
                 WHERE project_id = ? AND artifact_id = ?
                 """,
                 (project_id, artifact_id),
+            ).fetchone()
+        return _artifact_from_row(row) if row is not None else None
+
+    def get_artifact_by_origin_run_id(
+        self,
+        origin_run_id: str,
+    ) -> ResearchArtifact | None:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT * FROM research_artifacts WHERE origin_run_id = ?
+                """,
+                (origin_run_id,),
             ).fetchone()
         return _artifact_from_row(row) if row is not None else None
 
@@ -604,9 +670,9 @@ class ResearchCatalog:
                     """
                     INSERT INTO agent_runs (
                         run_id, task_id, thread_id, attempt_number, status,
-                        final_artifact_id, error_message, created_at,
+                        outcome, output_artifact_id, error_message, created_at,
                         started_at, finished_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, NULL, NULL, ?)
+                    ) VALUES (?, ?, ?, ?, 'pending', NULL, NULL, NULL, ?, NULL, NULL, ?)
                     """,
                     (
                         run_id,
@@ -624,6 +690,225 @@ class ResearchCatalog:
         result = self.get_run(task_id, run_id)
         assert result is not None
         return result
+
+    def get_active_run(self, task_id: str) -> AgentRun | None:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE task_id = ?
+                  AND status IN ('pending', 'running', 'interrupted')
+                ORDER BY attempt_number DESC LIMIT 1
+                """,
+                (task_id,),
+            ).fetchone()
+        return _run_from_row(row) if row is not None else None
+
+    def start_task_run(
+        self,
+        *,
+        project_id: str,
+        task_id: str,
+        run_id: str,
+        thread_id: str,
+        timestamp: str,
+    ) -> tuple[ResearchTask, AgentRun]:
+        """Transaction A: atomically move Task and its new Run to running."""
+        with self._lock:
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                task_row = self.connection.execute(
+                    """
+                    SELECT * FROM research_tasks
+                    WHERE project_id = ? AND task_id = ?
+                    """,
+                    (project_id, task_id),
+                ).fetchone()
+                if task_row is None:
+                    raise ValueError("task_not_pending")
+                active_row = self.connection.execute(
+                    """
+                    SELECT run_id FROM agent_runs
+                    WHERE task_id = ?
+                      AND status IN ('pending', 'running', 'interrupted')
+                    ORDER BY attempt_number DESC LIMIT 1
+                    """,
+                    (task_id,),
+                ).fetchone()
+                if active_row is not None:
+                    raise ActiveAgentRunError(str(active_row["run_id"]))
+                if task_row["status"] != "pending":
+                    raise ValueError("task_not_pending")
+                next_row = self.connection.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt_number), 0) + 1 AS value
+                    FROM agent_runs WHERE task_id = ?
+                    """,
+                    (task_id,),
+                ).fetchone()
+                self.connection.execute(
+                    """
+                    INSERT INTO agent_runs (
+                        run_id, task_id, thread_id, attempt_number, status,
+                        outcome, output_artifact_id, error_message, created_at,
+                        started_at, finished_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'running', NULL, NULL, NULL,
+                              ?, ?, NULL, ?)
+                    """,
+                    (
+                        run_id,
+                        task_id,
+                        thread_id,
+                        int(next_row["value"]),
+                        timestamp,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+                self.connection.execute(
+                    """
+                    UPDATE research_tasks SET
+                        status = 'running', started_at = COALESCE(started_at, ?),
+                        completed_at = NULL, result_summary = NULL,
+                        error_message = NULL, updated_at = ?
+                    WHERE project_id = ? AND task_id = ? AND status = 'pending'
+                    """,
+                    (timestamp, timestamp, project_id, task_id),
+                )
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        task = self.get_task(project_id, task_id)
+        run = self.get_run(task_id, run_id)
+        assert task is not None and run is not None
+        return task, run
+
+    def finish_task_run(
+        self,
+        *,
+        task: ResearchTask,
+        run: AgentRun,
+        artifact: ResearchArtifact | None,
+    ) -> tuple[ResearchTask, AgentRun, ResearchArtifact | None]:
+        """Transaction B: atomically persist Artifact, Run and Task outcome."""
+        with self._lock:
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                current_row = self.connection.execute(
+                    "SELECT * FROM agent_runs WHERE run_id = ? AND task_id = ?",
+                    (run.run_id, run.task_id),
+                ).fetchone()
+                if current_row is None:
+                    raise KeyError(run.run_id)
+                current = _run_from_row(current_row)
+                if current.status in {"completed", "failed", "cancelled"}:
+                    existing = (
+                        self._artifact_by_origin_locked(run.run_id)
+                        if current.output_artifact_id is not None
+                        else None
+                    )
+                    self.connection.commit()
+                    persisted_task = self.get_task(task.project_id, task.task_id)
+                    assert persisted_task is not None
+                    return persisted_task, current, existing
+                if current.status != "running":
+                    raise ValueError("run_not_running")
+
+                persisted_artifact = self._artifact_by_origin_locked(run.run_id)
+                output_artifact_id = run.output_artifact_id
+                if artifact is not None:
+                    if artifact.origin_run_id != run.run_id:
+                        raise ValueError("artifact_origin_mismatch")
+                    if persisted_artifact is None:
+                        self._insert_artifact_locked(artifact)
+                        persisted_artifact = artifact
+                    output_artifact_id = persisted_artifact.artifact_id
+                elif persisted_artifact is not None:
+                    output_artifact_id = persisted_artifact.artifact_id
+
+                self.connection.execute(
+                    """
+                    UPDATE agent_runs SET
+                        status = ?, outcome = ?, output_artifact_id = ?,
+                        error_message = ?, started_at = ?, finished_at = ?,
+                        updated_at = ?
+                    WHERE run_id = ? AND task_id = ?
+                    """,
+                    (
+                        run.status,
+                        run.outcome,
+                        output_artifact_id,
+                        run.error_message,
+                        run.started_at,
+                        run.finished_at,
+                        run.updated_at,
+                        run.run_id,
+                        run.task_id,
+                    ),
+                )
+                self.connection.execute(
+                    """
+                    UPDATE research_tasks SET
+                        status = ?, result_summary = ?, error_message = ?,
+                        updated_at = ?, started_at = ?, completed_at = ?
+                    WHERE project_id = ? AND task_id = ?
+                    """,
+                    (
+                        task.status,
+                        task.result_summary,
+                        task.error_message,
+                        task.updated_at,
+                        task.started_at,
+                        task.completed_at,
+                        task.project_id,
+                        task.task_id,
+                    ),
+                )
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        persisted_task = self.get_task(task.project_id, task.task_id)
+        persisted_run = self.get_run(run.task_id, run.run_id)
+        assert persisted_task is not None and persisted_run is not None
+        return persisted_task, persisted_run, persisted_artifact
+
+    def _artifact_by_origin_locked(
+        self,
+        origin_run_id: str,
+    ) -> ResearchArtifact | None:
+        row = self.connection.execute(
+            "SELECT * FROM research_artifacts WHERE origin_run_id = ?",
+            (origin_run_id,),
+        ).fetchone()
+        return _artifact_from_row(row) if row is not None else None
+
+    def _insert_artifact_locked(self, artifact: ResearchArtifact) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO research_artifacts (
+                artifact_id, project_id, task_id, title, artifact_type,
+                content, status, created_by, sources, origin_run_id,
+                created_at, updated_at, finalized_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                artifact.artifact_id,
+                artifact.project_id,
+                artifact.task_id,
+                artifact.title,
+                artifact.artifact_type,
+                artifact.content,
+                artifact.status,
+                artifact.created_by,
+                _serialize_sources(artifact.sources),
+                artifact.origin_run_id,
+                artifact.created_at,
+                artifact.updated_at,
+                artifact.finalized_at,
+            ),
+        )
 
     def list_runs(self, task_id: str) -> list[AgentRun]:
         with self._lock:
@@ -653,13 +938,14 @@ class ResearchCatalog:
             cursor = self.connection.execute(
                 """
                 UPDATE agent_runs SET
-                    status = ?, final_artifact_id = ?, error_message = ?,
+                    status = ?, outcome = ?, output_artifact_id = ?, error_message = ?,
                     started_at = ?, finished_at = ?, updated_at = ?
                 WHERE run_id = ? AND task_id = ?
                 """,
                 (
                     run.status,
-                    run.final_artifact_id,
+                    run.outcome,
+                    run.output_artifact_id,
                     run.error_message,
                     run.started_at,
                     run.finished_at,

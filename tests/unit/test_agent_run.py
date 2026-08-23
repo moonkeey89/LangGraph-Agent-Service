@@ -74,7 +74,10 @@ class AgentRunMigrationTests(unittest.TestCase):
                         "SELECT version FROM schema_migrations ORDER BY version"
                     )
                 ]
-                self.assertEqual(versions, [1, 2, 3, CURRENT_SCHEMA_VERSION])
+                self.assertEqual(
+                    versions,
+                    [1, 2, 3, 4, CURRENT_SCHEMA_VERSION],
+                )
                 self.assertIsNotNone(catalog.get_by_id(project_id))
                 self.assertIsNotNone(catalog.get_task(project_id, task_id))
                 self.assertIsNotNone(catalog.get_artifact(project_id, artifact_id))
@@ -91,7 +94,7 @@ class AgentRunMigrationTests(unittest.TestCase):
                     restarted.connection.execute(
                         "SELECT COUNT(*) FROM schema_migrations"
                     ).fetchone()[0],
-                    4,
+                    5,
                 )
             finally:
                 restarted.close()

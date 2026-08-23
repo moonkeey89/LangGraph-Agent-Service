@@ -2,7 +2,11 @@ import re
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from ai_agent_learning.research.models import AgentRun, AgentRunStatus
+from ai_agent_learning.research.models import (
+    AgentRun,
+    AgentRunOutcome,
+    AgentRunStatus,
+)
 
 
 MAX_RUN_ERROR_LENGTH = 2_000
@@ -54,9 +58,9 @@ def transition_agent_run(
         raise InvalidAgentRunTransitionInputError(
             "error_message 只允许在转换到 failed 时提供"
         )
-    if target_status == "completed" and run.final_artifact_id is None:
+    if target_status == "completed" and run.output_artifact_id is None:
         raise InvalidAgentRunTransitionInputError(
-            "完成运行前必须绑定 final_artifact_id"
+            "完成运行前必须绑定 output_artifact_id"
         )
 
     now = timestamp or datetime.now(timezone.utc).isoformat()
@@ -76,6 +80,45 @@ def transition_agent_run(
         changes["finished_at"] = None
 
     return replace(run, **changes)
+
+
+def finalize_agent_run(
+    run: AgentRun,
+    *,
+    outcome: AgentRunOutcome,
+    output_artifact_id: str | None,
+    message: str | None = None,
+    timestamp: str | None = None,
+) -> AgentRun:
+    """Map one terminal Research Graph outcome to durable AgentRun metadata."""
+    if run.status != "running":
+        raise InvalidAgentRunTransitionError(
+            f"只有 running Run 可以收尾，当前状态为 {run.status}"
+        )
+    if outcome in {"completed", "needs_review"} and not output_artifact_id:
+        raise InvalidAgentRunTransitionInputError(
+            f"{outcome} 结果必须关联 output_artifact_id"
+        )
+    if outcome in {"blocked", "failed"} and output_artifact_id is not None:
+        raise InvalidAgentRunTransitionInputError(
+            f"{outcome} 结果不能关联 output_artifact_id"
+        )
+    cleaned_message = clean_run_error(message)
+    if outcome in {"blocked", "failed", "needs_review"} and not cleaned_message:
+        raise InvalidAgentRunTransitionInputError(
+            f"{outcome} 结果必须提供安全说明"
+        )
+
+    now = timestamp or datetime.now(timezone.utc).isoformat()
+    return replace(
+        run,
+        status="failed" if outcome == "failed" else "completed",
+        outcome=outcome,
+        output_artifact_id=output_artifact_id,
+        error_message=cleaned_message,
+        finished_at=now,
+        updated_at=now,
+    )
 
 
 def clean_run_error(value: str | None) -> str | None:

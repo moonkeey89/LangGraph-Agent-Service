@@ -20,7 +20,9 @@ from ai_agent_learning.knowledge import (
     resolve_source_directory,
 )
 from ai_agent_learning.research import (
+    ResearchExecutionService,
     ResearchService,
+    build_research_graph,
     open_research_catalog,
     resolve_researchflow_path,
 )
@@ -103,8 +105,19 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
             knowledge_base_id=active_settings.knowledge_base_id,
             knowledge_top_k=active_settings.knowledge_top_k,
         )
+        research_graph = build_research_graph(
+            llm,
+            retriever=knowledge_retriever,
+            checkpointer=checkpointer,
+            top_k=active_settings.knowledge_top_k,
+        )
+        research_execution_service = ResearchExecutionService(
+            research_service,
+            research_graph,
+        )
         yield AgentService(
             graph,
             knowledge_service=knowledge_service,
             research_service=research_service,
+            research_execution_service=research_execution_service,
         )

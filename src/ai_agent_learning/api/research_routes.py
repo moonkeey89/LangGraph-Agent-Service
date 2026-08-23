@@ -3,7 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query, Response, status
 from starlette.concurrency import run_in_threadpool
 
-from ai_agent_learning.api.dependencies import get_research_service, get_user_id
+from ai_agent_learning.api.dependencies import (
+    get_research_execution_service,
+    get_research_service,
+    get_user_id,
+)
 from ai_agent_learning.api.models import (
     AgentRunResponse,
     ArtifactStatus,
@@ -13,6 +17,7 @@ from ai_agent_learning.api.models import (
     CreateResearchTaskRequest,
     ErrorResponse,
     ResearchProjectResponse,
+    ResearchExecutionResponse,
     ResearchArtifactResponse,
     ResearchTaskResponse,
     TransitionResearchTaskRequest,
@@ -27,6 +32,7 @@ from ai_agent_learning.research.models import (
     ResearchTask,
 )
 from ai_agent_learning.research.service import ResearchService
+from ai_agent_learning.research.execution import ResearchExecutionService
 
 
 router = APIRouter(prefix="/api/v1/research/projects", tags=["research-projects"])
@@ -50,6 +56,9 @@ ARTIFACT_BUSINESS_RESPONSES = {
 }
 RUN_BUSINESS_RESPONSES = {
     404: {"model": ErrorResponse, "description": "Project, task, or run not found"},
+    409: {"model": ErrorResponse, "description": "Task or run state conflict"},
+    422: {"model": ErrorResponse, "description": "Execution result validation failed"},
+    500: {"model": ErrorResponse, "description": "Research execution failed safely"},
 }
 
 
@@ -421,6 +430,30 @@ async def list_agent_runs(
         user_id,
     )
     return [_run_response(run) for run in runs]
+
+
+@router.post(
+    "/{project_id}/tasks/{task_id}/runs",
+    response_model=ResearchExecutionResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=RUN_BUSINESS_RESPONSES,
+)
+async def execute_research_task(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    task_id: Annotated[str, Path(min_length=1, max_length=128)],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[
+        ResearchExecutionService,
+        Depends(get_research_execution_service),
+    ],
+) -> ResearchExecutionResponse:
+    result = await run_in_threadpool(
+        service.execute_task,
+        project_id=project_id,
+        task_id=task_id,
+        user_id=user_id,
+    )
+    return ResearchExecutionResponse.model_validate(result)
 
 
 @router.get(

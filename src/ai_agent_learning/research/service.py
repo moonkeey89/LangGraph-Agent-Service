@@ -7,7 +7,10 @@ from uuid import uuid4
 
 from ai_agent_learning.knowledge.models import KnowledgeChunk
 from ai_agent_learning.knowledge.service import KnowledgeServiceError
-from ai_agent_learning.research.catalog import ResearchCatalog
+from ai_agent_learning.research.catalog import (
+    ActiveAgentRunError,
+    ResearchCatalog,
+)
 from ai_agent_learning.research.models import (
     AGENT_RUN_STATUSES,
     RESEARCH_ARTIFACT_CREATORS,
@@ -17,6 +20,7 @@ from ai_agent_learning.research.models import (
     RESEARCH_TASK_TYPES,
     ArtifactSource,
     AgentRun,
+    AgentRunOutcome,
     AgentRunStatus,
     ResearchArtifact,
     ResearchArtifactCreator,
@@ -37,6 +41,8 @@ from ai_agent_learning.research.run_state import (
     InvalidAgentRunTransitionError,
     InvalidAgentRunTransitionInputError,
     transition_agent_run,
+    clean_run_error,
+    finalize_agent_run,
 )
 
 
@@ -148,6 +154,15 @@ class AgentRunNotFoundError(ResearchServiceError):
 class AgentRunConflictError(ResearchServiceError):
     status_code = 409
     public_message = "Agent run operation conflicts with current state"
+
+    def __init__(self, existing_run_id: str | None = None):
+        super().__init__(existing_run_id)
+        self.existing_run_id = existing_run_id
+        if existing_run_id is not None:
+            self.public_message = (
+                "Research task already has an active run: "
+                f"{existing_run_id}"
+            )
 
 
 class AgentRunValidationError(ResearchServiceError):
@@ -550,6 +565,7 @@ class ResearchService:
             status="draft",
             created_by=_artifact_creator(created_by),
             sources=sources,
+            origin_run_id=None,
             created_at=timestamp,
             updated_at=timestamp,
             finalized_at=None,
@@ -754,6 +770,183 @@ class ResearchService:
             logger.exception("Agent run creation failed")
             raise ResearchPersistenceError from error
 
+    def start_execution(
+        self,
+        project_id: str,
+        task_id: str,
+        owner_user_id: str,
+    ) -> tuple[ResearchProject, ResearchTask, AgentRun]:
+        """Validate and commit transaction A without invoking the Graph."""
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        self._ensure_project_runs_mutable(project)
+        normalized_task_id = _task_id(task_id)
+        task = self._get_task(normalized_project_id, normalized_task_id)
+        self._knowledge_base(project.default_knowledge_base_id, owner)
+        try:
+            active = self.catalog.get_active_run(normalized_task_id)
+            if active is not None:
+                raise AgentRunConflictError(active.run_id)
+            if task.status != "pending":
+                raise ResearchTaskConflictError
+            running_task, run = self.catalog.start_task_run(
+                project_id=normalized_project_id,
+                task_id=normalized_task_id,
+                run_id=f"run_{uuid4().hex}",
+                thread_id=f"research-run-{uuid4().hex}",
+                timestamp=_now(),
+            )
+            return project, running_task, run
+        except AgentRunConflictError:
+            raise
+        except ActiveAgentRunError as error:
+            raise AgentRunConflictError(error.run_id) from error
+        except ValueError as error:
+            raise ResearchTaskConflictError from error
+        except sqlite3.IntegrityError as error:
+            raise AgentRunConflictError from error
+        except sqlite3.Error as error:
+            logger.exception("Research execution start transaction failed")
+            raise ResearchPersistenceError from error
+
+    def finish_execution(
+        self,
+        project_id: str,
+        task_id: str,
+        run_id: str,
+        owner_user_id: str,
+        *,
+        outcome: AgentRunOutcome,
+        final_answer: str = "",
+        sources: list[dict[str, object]] | None = None,
+        unresolved_issues: list[str] | None = None,
+        error: str | None = None,
+    ) -> tuple[ResearchTask, AgentRun, ResearchArtifact | None]:
+        """Validate Graph output and commit transaction B atomically."""
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        normalized_task_id = _task_id(task_id)
+        task = self._get_task(normalized_project_id, normalized_task_id)
+        current = self._get_run(normalized_task_id, _run_id(run_id))
+        if current.status in {"completed", "failed", "cancelled"}:
+            if current.outcome != outcome:
+                raise AgentRunConflictError(current.run_id)
+            artifact = (
+                self.catalog.get_artifact_by_origin_run_id(current.run_id)
+                if current.output_artifact_id is not None
+                else None
+            )
+            return task, current, artifact
+        if current.status != "running" or task.status != "running":
+            raise AgentRunConflictError(current.run_id)
+
+        normalized_answer = final_answer.strip()
+        issues = [
+            str(item).strip()[:500]
+            for item in (unresolved_issues or [])
+            if str(item).strip()
+        ][:20]
+        message = clean_run_error(error)
+        artifact: ResearchArtifact | None = None
+        output_artifact_id: str | None = None
+        if outcome in {"completed", "needs_review"}:
+            if not normalized_answer:
+                raise AgentRunValidationError(
+                    f"{outcome} 结果必须包含 final_answer"
+                )
+            resolved_sources = self._resolve_graph_sources(
+                project,
+                owner,
+                sources or [],
+            )
+            if outcome == "needs_review":
+                message = clean_run_error(
+                    "；".join(issues) or "科研答案需要人工审查"
+                )
+            existing = self.catalog.get_artifact_by_origin_run_id(current.run_id)
+            output_artifact_id = (
+                existing.artifact_id
+                if existing is not None
+                else f"ra_{uuid4().hex}"
+            )
+            timestamp = _now()
+            content = normalized_answer
+            if issues:
+                content += "\n\n待人工审查问题：\n" + "\n".join(
+                    f"- {item}" for item in issues
+                )
+            artifact = existing or ResearchArtifact(
+                artifact_id=output_artifact_id,
+                project_id=normalized_project_id,
+                task_id=normalized_task_id,
+                title=_artifact_title(f"{task.title[:180]} - 执行草稿"),
+                artifact_type=_execution_artifact_type(task.task_type),
+                content=_artifact_content(content),
+                status="draft",
+                created_by="agent",
+                sources=resolved_sources,
+                origin_run_id=current.run_id,
+                created_at=timestamp,
+                updated_at=timestamp,
+                finalized_at=None,
+            )
+        elif outcome == "blocked":
+            message = message or "缺少完成科研任务所需的可靠条件或证据"
+        elif outcome == "failed":
+            message = message or "科研任务执行失败"
+        else:
+            raise AgentRunValidationError("未知的 Research Graph outcome")
+
+        timestamp = _now()
+        try:
+            finished_run = finalize_agent_run(
+                current,
+                outcome=outcome,
+                output_artifact_id=output_artifact_id,
+                message=message,
+                timestamp=timestamp,
+            )
+            if outcome == "completed":
+                finished_task = transition_task_state(
+                    task,
+                    "completed",
+                    result_summary=normalized_answer[:10_000],
+                    timestamp=timestamp,
+                )
+            elif outcome in {"blocked", "needs_review"}:
+                finished_task = transition_task_state(
+                    task,
+                    "blocked",
+                    reason=message,
+                    timestamp=timestamp,
+                )
+            else:
+                finished_task = transition_task_state(
+                    task,
+                    "failed",
+                    reason=message,
+                    timestamp=timestamp,
+                )
+            return self.catalog.finish_task_run(
+                task=finished_task,
+                run=finished_run,
+                artifact=artifact,
+            )
+        except (InvalidAgentRunTransitionError, InvalidTaskTransitionError) as exc:
+            raise AgentRunConflictError(current.run_id) from exc
+        except (
+            InvalidAgentRunTransitionInputError,
+            InvalidTaskTransitionInputError,
+        ) as exc:
+            raise AgentRunValidationError(str(exc)) from exc
+        except sqlite3.IntegrityError as exc:
+            raise AgentRunConflictError(current.run_id) from exc
+        except sqlite3.Error as exc:
+            logger.exception("Research execution finish transaction failed")
+            raise ResearchPersistenceError from exc
+
     def list_runs(
         self,
         project_id: str,
@@ -814,7 +1007,7 @@ class ResearchService:
             raise AgentRunValidationError(str(error)) from error
         return self._save_run(transitioned)
 
-    def attach_final_artifact(
+    def attach_output_artifact(
         self,
         project_id: str,
         task_id: str,
@@ -834,23 +1027,43 @@ class ResearchService:
             normalized_project_id,
             normalized_artifact_id,
         )
-        if artifact.status != "final" or artifact.task_id not in {
+        if artifact.task_id not in {
             None,
             normalized_task_id,
         }:
             raise AgentRunConflictError
-        if current.final_artifact_id == normalized_artifact_id:
+        if current.output_artifact_id == normalized_artifact_id:
             return current
-        if current.final_artifact_id is not None:
+        if current.output_artifact_id is not None:
             raise AgentRunConflictError
         if current.status in {"completed", "failed", "cancelled"}:
             raise AgentRunConflictError
         return self._save_run(
             replace(
                 current,
-                final_artifact_id=normalized_artifact_id,
+                output_artifact_id=normalized_artifact_id,
                 updated_at=_now(),
             )
+        )
+
+    def attach_final_artifact(
+        self,
+        project_id: str,
+        task_id: str,
+        run_id: str,
+        artifact_id: str,
+        owner_user_id: str,
+    ) -> AgentRun:
+        """Compatibility wrapper retaining v4's finalized-artifact contract."""
+        artifact = self.get_artifact(project_id, artifact_id, owner_user_id)
+        if artifact.status != "final":
+            raise AgentRunConflictError
+        return self.attach_output_artifact(
+            project_id,
+            task_id,
+            run_id,
+            artifact_id,
+            owner_user_id,
         )
 
     def _get_owned(self, project_id: str, owner_user_id: str) -> ResearchProject:
@@ -999,6 +1212,31 @@ class ResearchService:
                 )
             )
         return sources
+
+    def _resolve_graph_sources(
+        self,
+        project: ResearchProject,
+        owner_user_id: str,
+        values: list[dict[str, object]],
+    ) -> list[ArtifactSource]:
+        """Discard model metadata and rebuild evidence from owned ready chunks."""
+        chunk_ids: list[str] = []
+        for value in values:
+            if not isinstance(value, dict):
+                raise ResearchArtifactValidationError(
+                    "Graph sources 必须是结构化来源列表"
+                )
+            knowledge_base_id = value.get("knowledge_base_id")
+            chunk_id = value.get("chunk_id")
+            if (
+                not isinstance(knowledge_base_id, str)
+                or knowledge_base_id != project.default_knowledge_base_id
+                or not isinstance(chunk_id, str)
+                or not chunk_id.strip()
+            ):
+                raise ResearchArtifactSourceNotFoundError
+            chunk_ids.append(chunk_id)
+        return self._resolve_sources(project, owner_user_id, chunk_ids)
 
     @staticmethod
     def _ensure_project_tasks_mutable(project: ResearchProject) -> None:
@@ -1221,6 +1459,14 @@ def _run_status(value: str) -> AgentRunStatus:
             "status 只能是 pending、running、interrupted、completed、failed 或 cancelled"
         )
     return cast(AgentRunStatus, value)
+
+
+def _execution_artifact_type(task_type: ResearchTaskType) -> ResearchArtifactType:
+    if task_type == "literature_review":
+        return "literature_review"
+    if task_type == "analysis":
+        return "analysis"
+    return "report"
 
 
 def _now() -> str:

@@ -48,6 +48,10 @@ AgentRunStatus = Literal[
 AGENT_RUN_STATUSES = frozenset(
     {"pending", "running", "interrupted", "completed", "failed", "cancelled"}
 )
+AgentRunOutcome = Literal["completed", "blocked", "failed", "needs_review"]
+AGENT_RUN_OUTCOMES = frozenset(
+    {"completed", "blocked", "failed", "needs_review"}
+)
 
 
 @dataclass(frozen=True)
@@ -112,6 +116,7 @@ class ResearchArtifact:
     created_at: str
     updated_at: str
     finalized_at: str | None
+    origin_run_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,9 +128,15 @@ class AgentRun:
     thread_id: str
     attempt_number: int
     status: AgentRunStatus
-    final_artifact_id: str | None
+    outcome: AgentRunOutcome | None
+    output_artifact_id: str | None
     error_message: str | None
     created_at: str
     started_at: str | None
     finished_at: str | None
     updated_at: str
+
+    @property
+    def final_artifact_id(self) -> str | None:
+        """Deprecated read-only alias for records created before schema v5."""
+        return self.output_artifact_id

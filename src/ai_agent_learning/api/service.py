@@ -20,6 +20,7 @@ from ai_agent_learning.knowledge.service import (
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from ai_agent_learning.research.execution import ResearchExecutionService
     from ai_agent_learning.research.service import ResearchService
 
 
@@ -210,10 +211,12 @@ class AgentService:
         *,
         knowledge_service: KnowledgeLibraryService | None = None,
         research_service: "ResearchService | None" = None,
+        research_execution_service: "ResearchExecutionService | None" = None,
     ):
         self.graph = graph
         self.knowledge_service = knowledge_service
         self.research_service = research_service
+        self.research_execution_service = research_execution_service
         # SqliteSaver/SqliteStore connections are shared for the lifespan.
         # Serialize graph calls in this minimal version to avoid concurrent use
         # of the same synchronous SQLite connections from worker threads.

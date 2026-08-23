@@ -9,6 +9,7 @@ from ai_agent_learning.api.models import (
 from ai_agent_learning.api.service import AgentService
 from ai_agent_learning.knowledge.service import KnowledgeLibraryService
 from ai_agent_learning.research.service import ResearchService
+from ai_agent_learning.research.execution import ResearchExecutionService
 
 
 def get_agent_service(request: Request) -> AgentService:
@@ -60,3 +61,17 @@ def get_research_service(
             detail="Research service is not ready",
         )
     return service.research_service
+
+
+def get_research_execution_service(
+    service: Annotated[AgentService, Depends(get_agent_service)],
+) -> ResearchExecutionService:
+    if not isinstance(
+        service.research_execution_service,
+        ResearchExecutionService,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Research execution service is not ready",
+        )
+    return service.research_execution_service

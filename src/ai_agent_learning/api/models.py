@@ -490,6 +490,7 @@ class ResearchArtifactResponse(BaseModel):
     status: ArtifactStatus
     created_by: ArtifactCreator
     sources: list[ArtifactSourceResponse]
+    origin_run_id: str | None
     created_at: str
     updated_at: str
     finalized_at: str | None
@@ -513,11 +514,23 @@ class AgentRunResponse(BaseModel):
     thread_id: str
     attempt_number: int
     status: AgentRunStatusValue
-    final_artifact_id: str | None
+    outcome: Literal["completed", "blocked", "failed", "needs_review"] | None
+    output_artifact_id: str | None
     error_message: str | None
     created_at: str
     started_at: str | None
     finished_at: str | None
     updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ResearchExecutionResponse(BaseModel):
+    run_id: str
+    task_id: str
+    status: AgentRunStatusValue
+    outcome: Literal["completed", "blocked", "failed", "needs_review"]
+    output_artifact_id: str | None
+    error: str | None
 
     model_config = ConfigDict(from_attributes=True)
