@@ -6,6 +6,11 @@ from ai_agent_learning.research.catalog import (
     resolve_researchflow_path,
 )
 from ai_agent_learning.research.models import (
+    ArtifactSource,
+    ResearchArtifact,
+    ResearchArtifactCreator,
+    ResearchArtifactStatus,
+    ResearchArtifactType,
     ResearchProject,
     ResearchProjectStatus,
     ResearchTask,
@@ -13,6 +18,10 @@ from ai_agent_learning.research.models import (
     ResearchTaskType,
 )
 from ai_agent_learning.research.service import (
+    ResearchArtifactConflictError,
+    ResearchArtifactNotFoundError,
+    ResearchArtifactSourceNotFoundError,
+    ResearchArtifactValidationError,
     ResearchPersistenceError,
     ResearchKnowledgeBaseNotFoundError,
     ResearchProjectConflictError,
@@ -27,9 +36,18 @@ from ai_agent_learning.research.service import (
 
 
 __all__ = [
+    "ArtifactSource",
     "CURRENT_SCHEMA_VERSION",
     "RESEARCHFLOW_DB_PATH",
     "ResearchCatalog",
+    "ResearchArtifact",
+    "ResearchArtifactConflictError",
+    "ResearchArtifactCreator",
+    "ResearchArtifactNotFoundError",
+    "ResearchArtifactSourceNotFoundError",
+    "ResearchArtifactStatus",
+    "ResearchArtifactType",
+    "ResearchArtifactValidationError",
     "ResearchKnowledgeBaseNotFoundError",
     "ResearchPersistenceError",
     "ResearchProject",

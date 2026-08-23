@@ -6,12 +6,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
-from ai_agent_learning.research.models import ResearchProject, ResearchTask
+from ai_agent_learning.research.models import (
+    ArtifactSource,
+    ResearchArtifact,
+    ResearchProject,
+    ResearchTask,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RESEARCHFLOW_DB_PATH = PROJECT_ROOT / "data" / "researchflow.sqlite"
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def resolve_researchflow_path(path: Path) -> Path:
@@ -132,6 +137,55 @@ class ResearchCatalog:
                     """,
                     (2, _now()),
                 )
+            if 3 not in applied_versions:
+                self.connection.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS research_artifacts (
+                        artifact_id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        task_id TEXT,
+                        title TEXT NOT NULL,
+                        artifact_type TEXT NOT NULL CHECK (
+                            artifact_type IN (
+                                'note', 'literature_review',
+                                'analysis', 'report'
+                            )
+                        ),
+                        content TEXT NOT NULL,
+                        status TEXT NOT NULL CHECK (
+                            status IN ('draft', 'final')
+                        ),
+                        created_by TEXT NOT NULL CHECK (
+                            created_by IN ('user', 'agent')
+                        ),
+                        sources TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        finalized_at TEXT,
+                        FOREIGN KEY (project_id)
+                            REFERENCES research_projects(project_id)
+                            ON DELETE RESTRICT,
+                        FOREIGN KEY (task_id)
+                            REFERENCES research_tasks(task_id)
+                            ON DELETE RESTRICT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_research_artifacts_project_updated
+                        ON research_artifacts(project_id, updated_at DESC);
+                    CREATE INDEX IF NOT EXISTS idx_research_artifacts_task
+                        ON research_artifacts(task_id);
+                    CREATE INDEX IF NOT EXISTS idx_research_artifacts_project_status
+                        ON research_artifacts(project_id, status);
+                    CREATE INDEX IF NOT EXISTS idx_research_artifacts_project_type
+                        ON research_artifacts(project_id, artifact_type);
+                    """
+                )
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO schema_migrations (version, applied_at)
+                    VALUES (?, ?)
+                    """,
+                    (3, _now()),
+                )
 
     def create(self, project: ResearchProject) -> ResearchProject:
         with self._lock, self.connection:
@@ -220,6 +274,28 @@ class ResearchCatalog:
                 WHERE project_id = ? LIMIT 1
                 """,
                 (project_id,),
+            ).fetchone()
+        return row is not None
+
+    def has_artifacts(self, project_id: str) -> bool:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT 1 FROM research_artifacts
+                WHERE project_id = ? LIMIT 1
+                """,
+                (project_id,),
+            ).fetchone()
+        return row is not None
+
+    def has_task_artifacts(self, project_id: str, task_id: str) -> bool:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT 1 FROM research_artifacts
+                WHERE project_id = ? AND task_id = ? LIMIT 1
+                """,
+                (project_id, task_id),
             ).fetchone()
         return row is not None
 
@@ -315,6 +391,112 @@ class ResearchCatalog:
             )
         return cursor.rowcount == 1
 
+    def create_artifact(self, artifact: ResearchArtifact) -> ResearchArtifact:
+        with self._lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO research_artifacts (
+                    artifact_id, project_id, task_id, title, artifact_type,
+                    content, status, created_by, sources, created_at,
+                    updated_at, finalized_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact.artifact_id,
+                    artifact.project_id,
+                    artifact.task_id,
+                    artifact.title,
+                    artifact.artifact_type,
+                    artifact.content,
+                    artifact.status,
+                    artifact.created_by,
+                    _serialize_sources(artifact.sources),
+                    artifact.created_at,
+                    artifact.updated_at,
+                    artifact.finalized_at,
+                ),
+            )
+        return artifact
+
+    def list_artifacts(
+        self,
+        project_id: str,
+        *,
+        task_id: str | None = None,
+        artifact_type: str | None = None,
+        status: str | None = None,
+    ) -> list[ResearchArtifact]:
+        clauses = ["project_id = ?"]
+        parameters: list[str] = [project_id]
+        if task_id is not None:
+            clauses.append("task_id = ?")
+            parameters.append(task_id)
+        if artifact_type is not None:
+            clauses.append("artifact_type = ?")
+            parameters.append(artifact_type)
+        if status is not None:
+            clauses.append("status = ?")
+            parameters.append(status)
+        query = (
+            "SELECT * FROM research_artifacts WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY updated_at DESC, artifact_id"
+        )
+        with self._lock:
+            rows = self.connection.execute(query, parameters).fetchall()
+        return [_artifact_from_row(row) for row in rows]
+
+    def get_artifact(
+        self,
+        project_id: str,
+        artifact_id: str,
+    ) -> ResearchArtifact | None:
+        with self._lock:
+            row = self.connection.execute(
+                """
+                SELECT * FROM research_artifacts
+                WHERE project_id = ? AND artifact_id = ?
+                """,
+                (project_id, artifact_id),
+            ).fetchone()
+        return _artifact_from_row(row) if row is not None else None
+
+    def update_artifact(self, artifact: ResearchArtifact) -> ResearchArtifact:
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                """
+                UPDATE research_artifacts SET
+                    title = ?, artifact_type = ?, content = ?, status = ?,
+                    sources = ?, updated_at = ?, finalized_at = ?
+                WHERE artifact_id = ? AND project_id = ?
+                """,
+                (
+                    artifact.title,
+                    artifact.artifact_type,
+                    artifact.content,
+                    artifact.status,
+                    _serialize_sources(artifact.sources),
+                    artifact.updated_at,
+                    artifact.finalized_at,
+                    artifact.artifact_id,
+                    artifact.project_id,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise KeyError(artifact.artifact_id)
+        return artifact
+
+    def delete_artifact(self, project_id: str, artifact_id: str) -> bool:
+        with self._lock, self.connection:
+            cursor = self.connection.execute(
+                """
+                DELETE FROM research_artifacts
+                WHERE project_id = ? AND artifact_id = ?
+                """,
+                (project_id, artifact_id),
+            )
+        return cursor.rowcount == 1
+
 
 @contextmanager
 def open_research_catalog(path: Path) -> Iterator[ResearchCatalog]:
@@ -345,3 +527,31 @@ def _task_from_row(row: sqlite3.Row) -> ResearchTask:
         raise sqlite3.DataError("invalid acceptance_criteria value")
     data["acceptance_criteria"] = criteria
     return ResearchTask(**data)
+
+
+def _serialize_sources(sources: list[ArtifactSource]) -> str:
+    values = [
+        {
+            "knowledge_base_id": item.knowledge_base_id,
+            "document_id": item.document_id,
+            "chunk_id": item.chunk_id,
+            "source": item.source,
+            "page": item.page,
+            "excerpt": item.excerpt,
+        }
+        for item in sources
+    ]
+    return json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+
+
+def _artifact_from_row(row: sqlite3.Row) -> ResearchArtifact:
+    data = dict(row)
+    try:
+        raw_sources = json.loads(str(data["sources"]))
+        if not isinstance(raw_sources, list):
+            raise TypeError
+        sources = [ArtifactSource(**item) for item in raw_sources]
+    except (TypeError, ValueError, KeyError) as error:
+        raise sqlite3.DataError("invalid artifact sources JSON") from error
+    data["sources"] = sources
+    return ResearchArtifact(**data)

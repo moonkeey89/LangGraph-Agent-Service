@@ -5,11 +5,20 @@ from datetime import datetime, timezone
 from typing import Protocol, cast
 from uuid import uuid4
 
+from ai_agent_learning.knowledge.models import KnowledgeChunk
 from ai_agent_learning.knowledge.service import KnowledgeServiceError
 from ai_agent_learning.research.catalog import ResearchCatalog
 from ai_agent_learning.research.models import (
+    RESEARCH_ARTIFACT_CREATORS,
+    RESEARCH_ARTIFACT_STATUSES,
+    RESEARCH_ARTIFACT_TYPES,
     RESEARCH_PROJECT_STATUSES,
     RESEARCH_TASK_TYPES,
+    ArtifactSource,
+    ResearchArtifact,
+    ResearchArtifactCreator,
+    ResearchArtifactStatus,
+    ResearchArtifactType,
     ResearchProject,
     ResearchProjectStatus,
     ResearchTask,
@@ -31,6 +40,10 @@ MAX_TASK_TITLE_LENGTH = 200
 MAX_TASK_OBJECTIVE_LENGTH = 5_000
 MAX_ACCEPTANCE_CRITERIA = 20
 MAX_ACCEPTANCE_CRITERION_LENGTH = 1_000
+MAX_ARTIFACT_TITLE_LENGTH = 200
+MAX_ARTIFACT_CONTENT_LENGTH = 100_000
+MAX_ARTIFACT_SOURCES = 50
+MAX_ARTIFACT_EXCERPT_LENGTH = 2_000
 _UNSET = object()
 
 
@@ -40,6 +53,14 @@ class KnowledgeOwnershipVerifier(Protocol):
         knowledge_base_id: str,
         owner_user_id: str,
     ) -> None: ...
+
+    def get_ready_chunk(
+        self,
+        *,
+        knowledge_base_id: str,
+        owner_user_id: str,
+        chunk_id: str,
+    ) -> KnowledgeChunk: ...
 
 
 class ResearchServiceError(RuntimeError):
@@ -88,13 +109,36 @@ class ResearchTaskValidationError(ResearchServiceError):
         self.public_message = message
 
 
+class ResearchArtifactNotFoundError(ResearchServiceError):
+    status_code = 404
+    public_message = "Research artifact resource was not found"
+
+
+class ResearchArtifactSourceNotFoundError(ResearchServiceError):
+    status_code = 404
+    public_message = "Research artifact evidence source was not found"
+
+
+class ResearchArtifactConflictError(ResearchServiceError):
+    status_code = 409
+    public_message = "Research artifact operation conflicts with current state"
+
+
+class ResearchArtifactValidationError(ResearchServiceError):
+    status_code = 422
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.public_message = message
+
+
 class ResearchPersistenceError(ResearchServiceError):
     status_code = 500
     public_message = "Research project storage is unavailable"
 
 
 class ResearchService:
-    """Apply project policy before accessing ResearchCatalog."""
+    """Apply ResearchFlow ownership and lifecycle policy before persistence."""
 
     def __init__(
         self,
@@ -246,7 +290,9 @@ class ResearchService:
         normalized_project_id = _project_id(project_id)
         self._get_owned(normalized_project_id, owner)
         try:
-            if self.catalog.has_tasks(normalized_project_id):
+            if self.catalog.has_tasks(
+                normalized_project_id
+            ) or self.catalog.has_artifacts(normalized_project_id):
                 raise ResearchProjectConflictError
             deleted = self.catalog.delete(normalized_project_id, owner)
         except ResearchProjectConflictError:
@@ -417,15 +463,236 @@ class ResearchService:
         if task.status not in {"pending", "cancelled"}:
             raise ResearchTaskConflictError
         try:
+            if self.catalog.has_task_artifacts(
+                normalized_project_id,
+                normalized_task_id,
+            ):
+                raise ResearchTaskConflictError
             deleted = self.catalog.delete_task(
                 normalized_project_id,
                 normalized_task_id,
             )
+        except ResearchTaskConflictError:
+            raise
+        except sqlite3.IntegrityError as error:
+            raise ResearchTaskConflictError from error
         except sqlite3.Error as error:
             logger.exception("Research task deletion failed")
             raise ResearchPersistenceError from error
         if not deleted:
             raise ResearchTaskNotFoundError
+
+    def create_artifact(
+        self,
+        project_id: str,
+        owner_user_id: str,
+        *,
+        title: str,
+        content: str,
+        artifact_type: ResearchArtifactType = "note",
+        task_id: str | None = None,
+        source_chunk_ids: list[str] | None = None,
+        created_by: ResearchArtifactCreator = "user",
+    ) -> ResearchArtifact:
+        """Create a draft; trusted internal callers may set created_by=agent."""
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        self._ensure_project_artifacts_mutable(project)
+        normalized_task_id = self._artifact_task_id(
+            normalized_project_id,
+            task_id,
+        )
+        sources = self._resolve_sources(
+            project,
+            owner,
+            source_chunk_ids or [],
+        )
+        timestamp = _now()
+        artifact = ResearchArtifact(
+            artifact_id=f"ra_{uuid4().hex}",
+            project_id=normalized_project_id,
+            task_id=normalized_task_id,
+            title=_artifact_title(title),
+            artifact_type=_artifact_type(artifact_type),
+            content=_artifact_content(content),
+            status="draft",
+            created_by=_artifact_creator(created_by),
+            sources=sources,
+            created_at=timestamp,
+            updated_at=timestamp,
+            finalized_at=None,
+        )
+        try:
+            return self.catalog.create_artifact(artifact)
+        except sqlite3.IntegrityError as error:
+            raise ResearchArtifactConflictError from error
+        except sqlite3.Error as error:
+            logger.exception("Research artifact creation failed")
+            raise ResearchPersistenceError from error
+
+    def list_artifacts(
+        self,
+        project_id: str,
+        owner_user_id: str,
+        *,
+        task_id: str | None = None,
+        artifact_type: ResearchArtifactType | None = None,
+        status: ResearchArtifactStatus | None = None,
+    ) -> list[ResearchArtifact]:
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        self._get_owned(normalized_project_id, owner)
+        normalized_task_id = None
+        if task_id is not None:
+            normalized_task_id = self._artifact_task_id(
+                normalized_project_id,
+                task_id,
+            )
+        normalized_type = (
+            None if artifact_type is None else _artifact_type(artifact_type)
+        )
+        normalized_status = (
+            None if status is None else _artifact_status(status)
+        )
+        try:
+            return self.catalog.list_artifacts(
+                normalized_project_id,
+                task_id=normalized_task_id,
+                artifact_type=normalized_type,
+                status=normalized_status,
+            )
+        except sqlite3.Error as error:
+            logger.exception("Research artifact listing failed")
+            raise ResearchPersistenceError from error
+
+    def get_artifact(
+        self,
+        project_id: str,
+        artifact_id: str,
+        owner_user_id: str,
+    ) -> ResearchArtifact:
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        self._get_owned(normalized_project_id, owner)
+        return self._get_artifact(
+            normalized_project_id,
+            _artifact_id(artifact_id),
+        )
+
+    def update_artifact(
+        self,
+        project_id: str,
+        artifact_id: str,
+        owner_user_id: str,
+        *,
+        title: str | object = _UNSET,
+        artifact_type: ResearchArtifactType | object = _UNSET,
+        content: str | object = _UNSET,
+        source_chunk_ids: list[str] | object = _UNSET,
+    ) -> ResearchArtifact:
+        if all(
+            value is _UNSET
+            for value in (title, artifact_type, content, source_chunk_ids)
+        ):
+            raise ResearchArtifactValidationError(
+                "PATCH 至少需要提供一个可更新字段"
+            )
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        self._ensure_project_artifacts_mutable(project)
+        current = self._get_artifact(
+            normalized_project_id,
+            _artifact_id(artifact_id),
+        )
+        if current.status != "draft":
+            raise ResearchArtifactConflictError
+        updated = replace(
+            current,
+            title=(
+                current.title
+                if title is _UNSET
+                else _artifact_title(cast(str, title))
+            ),
+            artifact_type=(
+                current.artifact_type
+                if artifact_type is _UNSET
+                else _artifact_type(
+                    cast(ResearchArtifactType, artifact_type)
+                )
+            ),
+            content=(
+                current.content
+                if content is _UNSET
+                else _artifact_content(cast(str, content))
+            ),
+            sources=(
+                current.sources
+                if source_chunk_ids is _UNSET
+                else self._resolve_sources(
+                    project,
+                    owner,
+                    cast(list[str], source_chunk_ids),
+                )
+            ),
+            updated_at=_now(),
+        )
+        return self._save_artifact(updated)
+
+    def finalize_artifact(
+        self,
+        project_id: str,
+        artifact_id: str,
+        owner_user_id: str,
+    ) -> ResearchArtifact:
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        self._ensure_project_artifacts_mutable(project)
+        current = self._get_artifact(
+            normalized_project_id,
+            _artifact_id(artifact_id),
+        )
+        if current.status != "draft":
+            raise ResearchArtifactConflictError
+        timestamp = _now()
+        return self._save_artifact(
+            replace(
+                current,
+                status="final",
+                updated_at=timestamp,
+                finalized_at=timestamp,
+            )
+        )
+
+    def delete_artifact(
+        self,
+        project_id: str,
+        artifact_id: str,
+        owner_user_id: str,
+    ) -> None:
+        owner = self._owner(owner_user_id)
+        normalized_project_id = _project_id(project_id)
+        project = self._get_owned(normalized_project_id, owner)
+        self._ensure_project_artifacts_mutable(project)
+        normalized_artifact_id = _artifact_id(artifact_id)
+        artifact = self._get_artifact(
+            normalized_project_id,
+            normalized_artifact_id,
+        )
+        if artifact.status != "draft":
+            raise ResearchArtifactConflictError
+        try:
+            deleted = self.catalog.delete_artifact(
+                normalized_project_id,
+                normalized_artifact_id,
+            )
+        except sqlite3.Error as error:
+            logger.exception("Research artifact deletion failed")
+            raise ResearchPersistenceError from error
+        if not deleted:
+            raise ResearchArtifactNotFoundError
 
     def _get_owned(self, project_id: str, owner_user_id: str) -> ResearchProject:
         try:
@@ -479,10 +746,89 @@ class ResearchService:
             logger.exception("Research task update failed")
             raise ResearchPersistenceError from error
 
+    def _get_artifact(
+        self,
+        project_id: str,
+        artifact_id: str,
+    ) -> ResearchArtifact:
+        try:
+            artifact = self.catalog.get_artifact(project_id, artifact_id)
+        except sqlite3.Error as error:
+            logger.exception("Research artifact lookup failed")
+            raise ResearchPersistenceError from error
+        if artifact is None:
+            raise ResearchArtifactNotFoundError
+        return artifact
+
+    def _save_artifact(self, artifact: ResearchArtifact) -> ResearchArtifact:
+        try:
+            return self.catalog.update_artifact(artifact)
+        except KeyError as error:
+            raise ResearchArtifactNotFoundError from error
+        except sqlite3.IntegrityError as error:
+            raise ResearchArtifactConflictError from error
+        except sqlite3.Error as error:
+            logger.exception("Research artifact update failed")
+            raise ResearchPersistenceError from error
+
+    def _artifact_task_id(
+        self,
+        project_id: str,
+        task_id: str | None,
+    ) -> str | None:
+        if task_id is None:
+            return None
+        normalized_task_id = _task_id(task_id)
+        self._get_task(project_id, normalized_task_id)
+        return normalized_task_id
+
+    def _resolve_sources(
+        self,
+        project: ResearchProject,
+        owner_user_id: str,
+        chunk_ids: list[str],
+    ) -> list[ArtifactSource]:
+        normalized_ids = _source_chunk_ids(chunk_ids)
+        if not normalized_ids:
+            return []
+        if project.default_knowledge_base_id is None:
+            raise ResearchArtifactValidationError(
+                "引用证据前必须为项目绑定默认知识库"
+            )
+        sources: list[ArtifactSource] = []
+        for chunk_id in normalized_ids:
+            try:
+                chunk = self.knowledge_service.get_ready_chunk(
+                    knowledge_base_id=project.default_knowledge_base_id,
+                    owner_user_id=owner_user_id,
+                    chunk_id=chunk_id,
+                )
+            except (KnowledgeServiceError, ValueError) as error:
+                raise ResearchArtifactSourceNotFoundError from error
+            excerpt = chunk.content.strip()
+            if not excerpt:
+                raise ResearchArtifactSourceNotFoundError
+            sources.append(
+                ArtifactSource(
+                    knowledge_base_id=project.default_knowledge_base_id,
+                    document_id=chunk.document_id,
+                    chunk_id=chunk.chunk_id,
+                    source=chunk.source,
+                    page=chunk.page,
+                    excerpt=excerpt[:MAX_ARTIFACT_EXCERPT_LENGTH],
+                )
+            )
+        return sources
+
     @staticmethod
     def _ensure_project_tasks_mutable(project: ResearchProject) -> None:
         if project.status == "archived":
             raise ResearchTaskConflictError
+
+    @staticmethod
+    def _ensure_project_artifacts_mutable(project: ResearchProject) -> None:
+        if project.status == "archived":
+            raise ResearchArtifactConflictError
 
     @staticmethod
     def _owner(owner_user_id: str) -> str:
@@ -592,6 +938,88 @@ def _acceptance_criteria(values: list[str]) -> list[str]:
                 f"{MAX_ACCEPTANCE_CRITERION_LENGTH} 个字符"
             )
         normalized.append(criterion)
+    return normalized
+
+
+def _artifact_id(artifact_id: str) -> str:
+    normalized = artifact_id.strip()
+    if not normalized:
+        raise ResearchArtifactNotFoundError
+    return normalized
+
+
+def _artifact_title(value: str) -> str:
+    if not isinstance(value, str):
+        raise ResearchArtifactValidationError("title 不能为 null")
+    normalized = value.strip()
+    if not normalized:
+        raise ResearchArtifactValidationError("title 不能为空")
+    if len(normalized) > MAX_ARTIFACT_TITLE_LENGTH:
+        raise ResearchArtifactValidationError(
+            f"title 不能超过 {MAX_ARTIFACT_TITLE_LENGTH} 个字符"
+        )
+    return normalized
+
+
+def _artifact_content(value: str) -> str:
+    if not isinstance(value, str):
+        raise ResearchArtifactValidationError("content 不能为 null")
+    normalized = value.strip()
+    if not normalized:
+        raise ResearchArtifactValidationError("content 不能为空")
+    if len(normalized) > MAX_ARTIFACT_CONTENT_LENGTH:
+        raise ResearchArtifactValidationError(
+            f"content 不能超过 {MAX_ARTIFACT_CONTENT_LENGTH} 个字符"
+        )
+    return normalized
+
+
+def _artifact_type(value: str) -> ResearchArtifactType:
+    if value not in RESEARCH_ARTIFACT_TYPES:
+        raise ResearchArtifactValidationError(
+            "artifact_type 只能是 note、literature_review、analysis 或 report"
+        )
+    return cast(ResearchArtifactType, value)
+
+
+def _artifact_status(value: str) -> ResearchArtifactStatus:
+    if value not in RESEARCH_ARTIFACT_STATUSES:
+        raise ResearchArtifactValidationError(
+            "status 只能是 draft 或 final"
+        )
+    return cast(ResearchArtifactStatus, value)
+
+
+def _artifact_creator(value: str) -> ResearchArtifactCreator:
+    if value not in RESEARCH_ARTIFACT_CREATORS:
+        raise ResearchArtifactValidationError(
+            "created_by 只能是 user 或 agent"
+        )
+    return cast(ResearchArtifactCreator, value)
+
+
+def _source_chunk_ids(values: list[str]) -> list[str]:
+    if not isinstance(values, list):
+        raise ResearchArtifactValidationError("source_chunk_ids 必须是字符串列表")
+    if len(values) > MAX_ARTIFACT_SOURCES:
+        raise ResearchArtifactValidationError(
+            f"source_chunk_ids 最多包含 {MAX_ARTIFACT_SOURCES} 项"
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise ResearchArtifactValidationError(
+                "source_chunk_ids 必须包含非空字符串"
+            )
+        chunk_id = value.strip()
+        if len(chunk_id) > 256:
+            raise ResearchArtifactValidationError(
+                "单个 source chunk ID 不能超过 256 个字符"
+            )
+        if chunk_id not in seen:
+            normalized.append(chunk_id)
+            seen.add(chunk_id)
     return normalized
 
 

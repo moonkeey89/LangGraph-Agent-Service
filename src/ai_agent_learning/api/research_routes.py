@@ -1,20 +1,29 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Response, status
 from starlette.concurrency import run_in_threadpool
 
 from ai_agent_learning.api.dependencies import get_research_service, get_user_id
 from ai_agent_learning.api.models import (
+    ArtifactStatus,
+    ArtifactType,
+    CreateResearchArtifactRequest,
     CreateResearchProjectRequest,
     CreateResearchTaskRequest,
     ErrorResponse,
     ResearchProjectResponse,
+    ResearchArtifactResponse,
     ResearchTaskResponse,
     TransitionResearchTaskRequest,
     UpdateResearchProjectRequest,
+    UpdateResearchArtifactRequest,
     UpdateResearchTaskRequest,
 )
-from ai_agent_learning.research.models import ResearchProject, ResearchTask
+from ai_agent_learning.research.models import (
+    ResearchArtifact,
+    ResearchProject,
+    ResearchTask,
+)
 from ai_agent_learning.research.service import ResearchService
 
 
@@ -29,6 +38,14 @@ TASK_BUSINESS_RESPONSES = {
     409: {"model": ErrorResponse, "description": "Task state conflict"},
     422: {"model": ErrorResponse, "description": "Request or business validation failed"},
 }
+ARTIFACT_BUSINESS_RESPONSES = {
+    404: {
+        "model": ErrorResponse,
+        "description": "Project, task, artifact, or evidence source not found",
+    },
+    409: {"model": ErrorResponse, "description": "Artifact state conflict"},
+    422: {"model": ErrorResponse, "description": "Request or business validation failed"},
+}
 
 
 def _response(project: ResearchProject) -> ResearchProjectResponse:
@@ -37,6 +54,10 @@ def _response(project: ResearchProject) -> ResearchProjectResponse:
 
 def _task_response(task: ResearchTask) -> ResearchTaskResponse:
     return ResearchTaskResponse.model_validate(task)
+
+
+def _artifact_response(artifact: ResearchArtifact) -> ResearchArtifactResponse:
+    return ResearchArtifactResponse.model_validate(artifact)
 
 
 @router.post(
@@ -237,6 +258,137 @@ async def delete_research_task(
         service.delete_task,
         project_id,
         task_id,
+        user_id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{project_id}/artifacts",
+    response_model=ResearchArtifactResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses=ARTIFACT_BUSINESS_RESPONSES,
+)
+async def create_research_artifact(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    request: CreateResearchArtifactRequest,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ResearchService, Depends(get_research_service)],
+) -> ResearchArtifactResponse:
+    artifact = await run_in_threadpool(
+        service.create_artifact,
+        project_id,
+        user_id,
+        created_by="user",
+        **request.model_dump(),
+    )
+    return _artifact_response(artifact)
+
+
+@router.get(
+    "/{project_id}/artifacts",
+    response_model=list[ResearchArtifactResponse],
+    responses=ARTIFACT_BUSINESS_RESPONSES,
+)
+async def list_research_artifacts(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ResearchService, Depends(get_research_service)],
+    task_id: Annotated[str | None, Query(max_length=128)] = None,
+    artifact_type: ArtifactType | None = None,
+    artifact_status: Annotated[
+        ArtifactStatus | None,
+        Query(alias="status"),
+    ] = None,
+) -> list[ResearchArtifactResponse]:
+    artifacts = await run_in_threadpool(
+        service.list_artifacts,
+        project_id,
+        user_id,
+        task_id=task_id,
+        artifact_type=artifact_type,
+        status=artifact_status,
+    )
+    return [_artifact_response(artifact) for artifact in artifacts]
+
+
+@router.get(
+    "/{project_id}/artifacts/{artifact_id}",
+    response_model=ResearchArtifactResponse,
+    responses=ARTIFACT_BUSINESS_RESPONSES,
+)
+async def get_research_artifact(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    artifact_id: Annotated[str, Path(min_length=1, max_length=128)],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ResearchService, Depends(get_research_service)],
+) -> ResearchArtifactResponse:
+    artifact = await run_in_threadpool(
+        service.get_artifact,
+        project_id,
+        artifact_id,
+        user_id,
+    )
+    return _artifact_response(artifact)
+
+
+@router.patch(
+    "/{project_id}/artifacts/{artifact_id}",
+    response_model=ResearchArtifactResponse,
+    responses=ARTIFACT_BUSINESS_RESPONSES,
+)
+async def update_research_artifact(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    artifact_id: Annotated[str, Path(min_length=1, max_length=128)],
+    request: UpdateResearchArtifactRequest,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ResearchService, Depends(get_research_service)],
+) -> ResearchArtifactResponse:
+    artifact = await run_in_threadpool(
+        service.update_artifact,
+        project_id,
+        artifact_id,
+        user_id,
+        **request.changes(),
+    )
+    return _artifact_response(artifact)
+
+
+@router.post(
+    "/{project_id}/artifacts/{artifact_id}/finalize",
+    response_model=ResearchArtifactResponse,
+    responses=ARTIFACT_BUSINESS_RESPONSES,
+)
+async def finalize_research_artifact(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    artifact_id: Annotated[str, Path(min_length=1, max_length=128)],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ResearchService, Depends(get_research_service)],
+) -> ResearchArtifactResponse:
+    artifact = await run_in_threadpool(
+        service.finalize_artifact,
+        project_id,
+        artifact_id,
+        user_id,
+    )
+    return _artifact_response(artifact)
+
+
+@router.delete(
+    "/{project_id}/artifacts/{artifact_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses=ARTIFACT_BUSINESS_RESPONSES,
+)
+async def delete_research_artifact(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    artifact_id: Annotated[str, Path(min_length=1, max_length=128)],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ResearchService, Depends(get_research_service)],
+) -> Response:
+    await run_in_threadpool(
+        service.delete_artifact,
+        project_id,
+        artifact_id,
         user_id,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

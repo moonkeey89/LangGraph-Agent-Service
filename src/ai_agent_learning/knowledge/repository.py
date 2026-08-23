@@ -144,6 +144,47 @@ class ChromaKnowledgeRepository:
             message=f"找到{len(results)}个相关片段",
         )
 
+    def get_chunk(
+        self,
+        *,
+        knowledge_base_id: str,
+        chunk_id: str,
+    ) -> KnowledgeChunk | None:
+        """Resolve one exact chunk without exposing Chroma records upstream."""
+        normalized_knowledge_base_id = validate_knowledge_base_id(
+            knowledge_base_id
+        )
+        normalized_chunk_id = chunk_id.strip()
+        if not normalized_chunk_id:
+            return None
+        raw = self.collection.get(
+            ids=[normalized_chunk_id],
+            where={"knowledge_base_id": normalized_knowledge_base_id},
+            include=["documents", "metadatas"],
+        )
+        ids = raw.get("ids") or []
+        documents = raw.get("documents") or []
+        metadatas = raw.get("metadatas") or []
+        if not ids or not documents or not metadatas:
+            return None
+        content = documents[0]
+        metadata = metadatas[0]
+        if not isinstance(content, str) or not isinstance(metadata, dict):
+            return None
+        raw_page = metadata.get("page", -1)
+        try:
+            page_value = int(raw_page)
+        except (TypeError, ValueError):
+            page_value = -1
+        return KnowledgeChunk(
+            content=content,
+            knowledge_base_id=normalized_knowledge_base_id,
+            document_id=str(metadata.get("document_id", "")),
+            source=str(metadata.get("source", "unknown")),
+            page=page_value if page_value >= 0 else None,
+            chunk_id=str(metadata.get("chunk_id", ids[0])),
+        )
+
     @staticmethod
     def _to_results(
         raw: dict[str, Any],

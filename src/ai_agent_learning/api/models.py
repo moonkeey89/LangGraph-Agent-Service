@@ -6,6 +6,9 @@ from ai_agent_learning.knowledge.models import validate_knowledge_base_id
 from ai_agent_learning.research.service import (
     MAX_ACCEPTANCE_CRITERIA,
     MAX_ACCEPTANCE_CRITERION_LENGTH,
+    MAX_ARTIFACT_CONTENT_LENGTH,
+    MAX_ARTIFACT_SOURCES,
+    MAX_ARTIFACT_TITLE_LENGTH,
     MAX_PROJECT_DESCRIPTION_LENGTH,
     MAX_PROJECT_NAME_LENGTH,
     MAX_RESEARCH_QUESTION_LENGTH,
@@ -372,5 +375,123 @@ class ResearchTaskResponse(BaseModel):
     updated_at: str
     started_at: str | None
     completed_at: str | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+ArtifactType = Literal["note", "literature_review", "analysis", "report"]
+ArtifactStatus = Literal["draft", "final"]
+ArtifactCreator = Literal["user", "agent"]
+
+
+class CreateResearchArtifactRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=MAX_ARTIFACT_TITLE_LENGTH)
+    content: str = Field(min_length=1, max_length=MAX_ARTIFACT_CONTENT_LENGTH)
+    artifact_type: ArtifactType = "note"
+    task_id: str | None = Field(default=None, max_length=MAX_IDENTIFIER_LENGTH)
+    source_chunk_ids: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_ARTIFACT_SOURCES,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("title", "content")
+    @classmethod
+    def normalize_artifact_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("字段不能为空")
+        return normalized
+
+    @field_validator("task_id")
+    @classmethod
+    def normalize_optional_task_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalized_identifier(value, "task_id")
+
+    @field_validator("source_chunk_ids")
+    @classmethod
+    def normalize_source_chunk_ids(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            chunk_id = _normalized_identifier(value, "source_chunk_id")
+            if chunk_id not in seen:
+                normalized.append(chunk_id)
+                seen.add(chunk_id)
+        return normalized
+
+
+class UpdateResearchArtifactRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=MAX_ARTIFACT_TITLE_LENGTH)
+    content: str | None = Field(
+        default=None,
+        max_length=MAX_ARTIFACT_CONTENT_LENGTH,
+    )
+    artifact_type: ArtifactType | None = None
+    source_chunk_ids: list[str] | None = Field(
+        default=None,
+        max_length=MAX_ARTIFACT_SOURCES,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_artifact_partial_update(self) -> "UpdateResearchArtifactRequest":
+        for field_name in self.model_fields_set:
+            if getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} 不能为 null")
+        return self
+
+    @field_validator("title", "content")
+    @classmethod
+    def normalize_artifact_update_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("字段不能为空")
+        return normalized
+
+    @field_validator("source_chunk_ids")
+    @classmethod
+    def normalize_artifact_update_sources(
+        cls,
+        values: list[str] | None,
+    ) -> list[str] | None:
+        if values is None:
+            return None
+        return CreateResearchArtifactRequest.normalize_source_chunk_ids(values)
+
+    def changes(self) -> dict[str, Any]:
+        return self.model_dump(exclude_unset=True)
+
+
+class ArtifactSourceResponse(BaseModel):
+    knowledge_base_id: str
+    document_id: str
+    chunk_id: str
+    source: str
+    page: int | None
+    excerpt: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ResearchArtifactResponse(BaseModel):
+    artifact_id: str
+    project_id: str
+    task_id: str | None
+    title: str
+    artifact_type: ArtifactType
+    content: str
+    status: ArtifactStatus
+    created_by: ArtifactCreator
+    sources: list[ArtifactSourceResponse]
+    created_at: str
+    updated_at: str
+    finalized_at: str | None
 
     model_config = ConfigDict(from_attributes=True)

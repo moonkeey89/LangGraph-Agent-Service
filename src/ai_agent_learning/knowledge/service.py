@@ -11,6 +11,7 @@ from ai_agent_learning.knowledge.ingestion import KnowledgeIngestor
 from ai_agent_learning.knowledge.loaders import KnowledgeDocumentError
 from ai_agent_learning.knowledge.models import (
     KnowledgeBaseRecord,
+    KnowledgeChunk,
     KnowledgeDocumentRecord,
 )
 from ai_agent_learning.knowledge.repository import (
@@ -126,6 +127,30 @@ class KnowledgeLibraryService:
 
     def ensure_owned(self, knowledge_base_id: str, owner_user_id: str) -> None:
         self.get_knowledge_base(knowledge_base_id, owner_user_id)
+
+    def get_ready_chunk(
+        self,
+        *,
+        knowledge_base_id: str,
+        owner_user_id: str,
+        chunk_id: str,
+    ) -> KnowledgeChunk:
+        """Return an owned chunk only when its catalog document is ready."""
+        self.ensure_owned(knowledge_base_id, owner_user_id)
+        chunk = self.repository.get_chunk(
+            knowledge_base_id=knowledge_base_id,
+            chunk_id=chunk_id,
+        )
+        if chunk is None or not chunk.document_id:
+            raise KnowledgeNotFoundError
+        document = self.catalog.get_document(chunk.document_id)
+        if (
+            document is None
+            or document.knowledge_base_id != knowledge_base_id
+            or document.status != "ready"
+        ):
+            raise KnowledgeNotFoundError
+        return chunk
 
     def list_documents(
         self,

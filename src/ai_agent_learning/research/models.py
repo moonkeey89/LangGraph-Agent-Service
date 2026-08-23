@@ -24,6 +24,19 @@ ResearchTaskStatus = Literal[
 RESEARCH_TASK_STATUSES = frozenset(
     {"pending", "running", "blocked", "completed", "failed", "cancelled"}
 )
+ResearchArtifactType = Literal[
+    "note",
+    "literature_review",
+    "analysis",
+    "report",
+]
+RESEARCH_ARTIFACT_TYPES = frozenset(
+    {"note", "literature_review", "analysis", "report"}
+)
+ResearchArtifactStatus = Literal["draft", "final"]
+RESEARCH_ARTIFACT_STATUSES = frozenset({"draft", "final"})
+ResearchArtifactCreator = Literal["user", "agent"]
+RESEARCH_ARTIFACT_CREATORS = frozenset({"user", "agent"})
 
 
 @dataclass(frozen=True)
@@ -58,3 +71,33 @@ class ResearchTask:
     updated_at: str
     started_at: str | None
     completed_at: str | None
+
+
+@dataclass(frozen=True)
+class ArtifactSource:
+    """Immutable evidence snapshot resolved from one trusted RAG chunk."""
+
+    knowledge_base_id: str
+    document_id: str
+    chunk_id: str
+    source: str
+    page: int | None
+    excerpt: str
+
+
+@dataclass(frozen=True)
+class ResearchArtifact:
+    """A draft or finalized research output owned through its project."""
+
+    artifact_id: str
+    project_id: str
+    task_id: str | None
+    title: str
+    artifact_type: ResearchArtifactType
+    content: str
+    status: ResearchArtifactStatus
+    created_by: ResearchArtifactCreator
+    sources: list[ArtifactSource]
+    created_at: str
+    updated_at: str
+    finalized_at: str | None
