@@ -22,6 +22,8 @@ _CREDENTIAL_PATTERN = re.compile(
     r"(?i)\b(api[_-]?key|password|passwd|token|secret)\b\s*[:=]\s*\S+"
 )
 _OPENAI_STYLE_KEY_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{6,}\b")
+_WINDOWS_PATH_PATTERN = re.compile(r"\b[A-Za-z]:[\\/][^\s;]+")
+_SQLITE_PATH_PATTERN = re.compile(r"(?i)(?:[/\\][^\s;]+)+\.sqlite(?:3)?\b")
 
 
 class AgentRunTransitionError(ValueError):
@@ -129,6 +131,8 @@ def clean_run_error(value: str | None) -> str | None:
         return None
     normalized = _CREDENTIAL_PATTERN.sub(r"\1=[REDACTED]", normalized)
     normalized = _OPENAI_STYLE_KEY_PATTERN.sub("[REDACTED]", normalized)
+    normalized = _WINDOWS_PATH_PATTERN.sub("[PATH REDACTED]", normalized)
+    normalized = _SQLITE_PATH_PATTERN.sub("[PATH REDACTED]", normalized)
     if normalized.lower().startswith("traceback"):
         normalized = "内部执行失败，详细堆栈已隐藏"
     return normalized[:MAX_RUN_ERROR_LENGTH]

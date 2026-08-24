@@ -1,6 +1,9 @@
+import logging
+from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from starlette.concurrency import run_in_threadpool
 
 from ai_agent_learning.api.dependencies import (
@@ -35,6 +38,7 @@ from ai_agent_learning.research.service import ResearchService
 from ai_agent_learning.research.execution import ResearchExecutionService
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/research/projects", tags=["research-projects"])
 BUSINESS_RESPONSES = {
     404: {"model": ErrorResponse, "description": "Project or knowledge base not found"},
@@ -454,6 +458,42 @@ async def execute_research_task(
         user_id=user_id,
     )
     return ResearchExecutionResponse.model_validate(result)
+
+
+@router.post(
+    "/{project_id}/tasks/{task_id}/runs/stream",
+    response_class=EventSourceResponse,
+    responses=RUN_BUSINESS_RESPONSES,
+)
+async def stream_research_task(
+    project_id: Annotated[str, Path(min_length=1, max_length=128)],
+    task_id: Annotated[str, Path(min_length=1, max_length=128)],
+    http_request: Request,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[
+        ResearchExecutionService,
+        Depends(get_research_execution_service),
+    ],
+) -> AsyncIterator[ServerSentEvent]:
+    event_stream = service.execute_stream(
+        project_id=project_id,
+        task_id=task_id,
+        user_id=user_id,
+    )
+    try:
+        async for item in event_stream:
+            if await http_request.is_disconnected():
+                logger.info(
+                    "Research SSE client disconnected project_id=%s task_id=%s",
+                    project_id,
+                    task_id,
+                )
+                break
+            yield ServerSentEvent(event=item.event, data=item.data)
+    finally:
+        # Closing the consumer marks delivery as stopped; the dedicated producer
+        # continues Graph execution and durable status finalization.
+        await event_stream.aclose()
 
 
 @router.get(

@@ -60,15 +60,55 @@ class FakeResearchGraph:
         self.catalog = catalog
         self.calls = []
 
-    def invoke(self, state, *, config, context):
+    def stream(
+        self,
+        state,
+        *,
+        config,
+        context,
+        stream_mode,
+        subgraphs,
+        version,
+    ):
         if self.catalog is not None:
             assert not self.catalog.connection.in_transaction
         self.calls.append(
             {"state": dict(state), "config": config, "context": context}
         )
+        assert stream_mode == ["updates", "messages"]
+        assert subgraphs is False
+        assert version == "v2"
         if self.error is not None:
             raise self.error
-        return dict(self.result)
+        yield {
+            "type": "updates",
+            "data": {"research_validate_binding": {}},
+        }
+        yield {
+            "type": "updates",
+            "data": {"research_supervisor": {"route": "direct"}},
+        }
+        if self.result.get("sources"):
+            yield {
+                "type": "updates",
+                "data": {
+                    "research_evidence_agent": {
+                        "sources": list(self.result["sources"])
+                    }
+                },
+            }
+        yield {
+            "type": "updates",
+            "data": {"research_synthesize": {}},
+        }
+        yield {
+            "type": "updates",
+            "data": {"research_critic": {}},
+        }
+        yield {
+            "type": "updates",
+            "data": {"research_finalize": dict(self.result)},
+        }
 
 
 class ResearchExecutionTests(unittest.TestCase):

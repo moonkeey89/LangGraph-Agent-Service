@@ -8,9 +8,12 @@ from ai_agent_learning.research.catalog import (
 from ai_agent_learning.research.graph import build_research_graph
 from ai_agent_learning.research.execution import (
     RESEARCH_CHECKPOINT_NAMESPACE,
+    RESEARCH_TERMINAL_EVENTS,
     ResearchExecutionError,
     ResearchExecutionResult,
     ResearchExecutionService,
+    ResearchStreamEvent,
+    ResearchStreamEventType,
 )
 from ai_agent_learning.research.graph_state import (
     ResearchContext,
@@ -94,6 +97,8 @@ __all__ = [
     "ResearchExecutionError",
     "ResearchExecutionResult",
     "ResearchExecutionService",
+    "ResearchStreamEvent",
+    "ResearchStreamEventType",
     "ResearchKnowledgeBaseNotFoundError",
     "ResearchPersistenceError",
     "ResearchProject",
@@ -112,6 +117,7 @@ __all__ = [
     "ResearchSupervisor",
     "ResearchSynthesizer",
     "RESEARCH_CHECKPOINT_NAMESPACE",
+    "RESEARCH_TERMINAL_EVENTS",
     "ResearchTask",
     "ResearchTaskConflictError",
     "ResearchTaskNotFoundError",
