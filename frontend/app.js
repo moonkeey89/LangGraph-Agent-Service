@@ -1,4 +1,6 @@
 import { createSseParser, runSseParserSelfTests } from "/assets/sse-parser.js";
+import { ApiError, readJsonResponse } from "/assets/api.js";
+import { initResearchFlow, runResearchFlowSelfTests } from "/assets/researchflow.js";
 
 const STORAGE_USER_ID = "ai-agent-learning.user-id";
 const STORAGE_THREAD_ID = "ai-agent-learning.thread-id";
@@ -17,8 +19,14 @@ const elements = {
   statusDot: document.querySelector("#status-dot"),
   navChat: document.querySelector("#nav-chat"),
   navKnowledge: document.querySelector("#nav-knowledge"),
+  navOverview: document.querySelector("#nav-overview"),
+  navTasks: document.querySelector("#nav-tasks"),
+  navArtifacts: document.querySelector("#nav-artifacts"),
   chatView: document.querySelector("#chat-view"),
   knowledgeView: document.querySelector("#knowledge-view"),
+  overviewView: document.querySelector("#overview-view"),
+  tasksView: document.querySelector("#tasks-view"),
+  artifactsView: document.querySelector("#artifacts-view"),
   knowledgeSelector: document.querySelector("#knowledge-selector"),
   showCreateKb: document.querySelector("#show-create-kb"),
   cancelCreateKb: document.querySelector("#cancel-create-kb"),
@@ -37,6 +45,8 @@ const elements = {
   uploadStatus: document.querySelector("#upload-status"),
   documentTableBody: document.querySelector("#document-table-body")
 };
+
+let researchFlow = null;
 
 const state = {
   threadId: loadThreadId(),
@@ -84,14 +94,28 @@ function selectedKnowledgeBase() {
 }
 
 function setView(name) {
-  const chat = name === "chat";
-  elements.chatView.hidden = !chat;
-  elements.knowledgeView.hidden = chat;
-  elements.navChat.classList.toggle("active", chat);
-  elements.navKnowledge.classList.toggle("active", !chat);
-  if (!chat) {
+  const views = {
+    overview: elements.overviewView,
+    knowledge: elements.knowledgeView,
+    tasks: elements.tasksView,
+    artifacts: elements.artifactsView,
+    chat: elements.chatView
+  };
+  const navItems = {
+    overview: elements.navOverview,
+    knowledge: elements.navKnowledge,
+    tasks: elements.navTasks,
+    artifacts: elements.navArtifacts,
+    chat: elements.navChat
+  };
+  for (const [viewName, view] of Object.entries(views)) {
+    view.hidden = viewName !== name;
+    navItems[viewName].classList.toggle("active", viewName === name);
+  }
+  if (name === "knowledge") {
     void loadKnowledgeBases();
   }
+  researchFlow?.activate(name);
 }
 
 function setSelectedKnowledgeBase(knowledgeBaseId, { loadDocuments = true } = {}) {
@@ -277,7 +301,7 @@ async function loadKnowledgeDocuments() {
 }
 
 function showKnowledgeError(error) {
-  const detail = error instanceof HttpError && typeof error.payload?.detail === "string"
+  const detail = error instanceof ApiError && typeof error.payload?.detail === "string"
     ? error.payload.detail
     : humanError(error);
   elements.uploadStatus.textContent = detail;
@@ -511,29 +535,8 @@ async function submitApproval(decision, card, buttons) {
   }
 }
 
-class HttpError extends Error {
-  constructor(status, payload) {
-    super(`HTTP ${status}`);
-    this.status = status;
-    this.payload = payload;
-  }
-}
-
-async function readJsonResponse(response) {
-  let payload = null;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
-  }
-  if (!response.ok) {
-    throw new HttpError(response.status, payload);
-  }
-  return payload;
-}
-
 function humanError(error) {
-  if (error instanceof HttpError) {
+  if (error instanceof ApiError) {
     if (error.status === 401 || error.status === 403) {
       return "当前用户无权访问这个会话，请检查用户 ID 或新建会话。";
     }
@@ -722,6 +725,7 @@ async function createKnowledgeBase(event) {
     elements.createKbForm.reset();
     elements.createKbForm.hidden = true;
     await loadKnowledgeBases();
+    await researchFlow?.refreshKnowledgeBases();
     setSelectedKnowledgeBase(created.knowledge_base_id);
   } catch (error) {
     showKnowledgeError(error);
@@ -807,6 +811,7 @@ async function deleteKnowledgeBase() {
     state.knowledgeDocuments = [];
     localStorage.setItem(STORAGE_KNOWLEDGE_BASE_ID, "");
     await loadKnowledgeBases();
+    await researchFlow?.refreshKnowledgeBases();
   } catch (error) {
     showKnowledgeError(error);
   } finally {
@@ -850,6 +855,9 @@ elements.newSession.addEventListener("click", startNewSession);
 
 elements.navChat.addEventListener("click", () => setView("chat"));
 elements.navKnowledge.addEventListener("click", () => setView("knowledge"));
+elements.navOverview.addEventListener("click", () => setView("overview"));
+elements.navTasks.addEventListener("click", () => setView("tasks"));
+elements.navArtifacts.addEventListener("click", () => setView("artifacts"));
 elements.knowledgeSelector.addEventListener("change", () => {
   setSelectedKnowledgeBase(elements.knowledgeSelector.value);
 });
@@ -906,6 +914,7 @@ elements.userId.addEventListener("change", () => {
     localStorage.setItem(STORAGE_KNOWLEDGE_BASE_ID, "");
     startNewSession();
     void loadKnowledgeBases();
+    void researchFlow?.handleUserChange();
   }
 });
 
@@ -917,10 +926,17 @@ function bootstrap() {
   addSystemMessage("页面已就绪。刷新会保留用户和 thread 标识，但不会自动重新渲染历史消息。");
   updateControls();
   void loadKnowledgeBases();
+  researchFlow = initResearchFlow({
+    getUserId: currentUserId,
+    navigate: setView
+  });
+  setView("overview");
 
   try {
     const passed = runSseParserSelfTests();
     console.info("SSE parser browser self-tests passed", passed);
+    const researchPassed = runResearchFlowSelfTests();
+    console.info("ResearchFlow browser self-tests passed", researchPassed);
   } catch (error) {
     console.error(error);
     showError("浏览器SSE解析器自检失败，请查看Console并停止使用当前页面。");
@@ -929,7 +945,8 @@ function bootstrap() {
 
 window.AiAgentFrontendTests = {
   createSseParser,
-  runSseParserSelfTests
+  runSseParserSelfTests,
+  runResearchFlowSelfTests
 };
 
 bootstrap();

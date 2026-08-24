@@ -3,184 +3,160 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="AI Agent Learning 原生 JavaScript 教学聊天页面"
-    />
-    <title>AI Agent Learning</title>
+    <meta name="description" content="ResearchFlow 原生 JavaScript 科研项目工作台" />
+    <title>ResearchFlow</title>
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
     <main class="app-shell" aria-labelledby="page-title">
       <header class="topbar">
         <div>
-          <p class="eyebrow">LANGGRAPH TEACHING CLIENT</p>
-          <h1 id="page-title">AI Agent Learning</h1>
-          <p class="subtitle">Supervisor、Subagents、Critic 与 Memory 的最小聊天入口</p>
+          <p class="eyebrow">LANGGRAPH RESEARCH WORKBENCH</p>
+          <h1 id="page-title">ResearchFlow</h1>
+          <p class="subtitle">科研知识管理、多 Agent 任务协作与成果审阅工作台</p>
         </div>
-        <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">
-          API 文档
-        </a>
+        <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">API 文档</a>
       </header>
 
+      <section class="workspace-context" aria-label="工作台上下文">
+        <label class="field">
+          <span>开发用户 X-User-ID</span>
+          <input id="user-id" type="text" maxlength="128" autocomplete="off" value="moon" />
+        </label>
+        <label class="field">
+          <span>当前科研项目</span>
+          <select id="project-selector"><option value="">尚未选择项目</option></select>
+        </label>
+        <div class="service-indicator"><span>服务状态</span><strong id="service-status" data-kind="working">正在检查</strong></div>
+        <p class="security-note">X-User-ID 仅用于本地开发阶段身份模拟，不是真实登录或认证。</p>
+      </section>
+
       <nav class="main-nav" aria-label="主导航">
-        <button id="nav-chat" class="nav-button active" type="button">对话</button>
-        <button id="nav-knowledge" class="nav-button" type="button">知识库</button>
+        <button id="nav-overview" class="nav-button active" data-view="overview" type="button">项目概览</button>
+        <button id="nav-knowledge" class="nav-button" data-view="knowledge" type="button">知识库</button>
+        <button id="nav-tasks" class="nav-button" data-view="tasks" type="button">科研任务</button>
+        <button id="nav-artifacts" class="nav-button" data-view="artifacts" type="button">研究成果</button>
+        <button id="nav-chat" class="nav-button" data-view="chat" type="button">Agent 对话</button>
       </nav>
 
-      <section id="chat-view" class="view active">
-      <section class="session-panel" aria-label="会话信息">
-        <label class="field user-field">
-          <span>开发用户 ID</span>
-          <input
-            id="user-id"
-            type="text"
-            maxlength="128"
-            autocomplete="off"
-            value="moon"
-          />
-        </label>
+      <div id="research-notice" class="research-notice" hidden aria-live="polite"><span id="research-notice-text"></span><button id="research-retry" class="link-button" type="button" hidden>重试</button></div>
 
-        <div class="thread-field">
-          <span>当前 thread_id</span>
-          <code id="thread-id"></code>
-        </div>
-
-        <label class="field knowledge-select-field">
-          <span>本轮知识库</span>
-          <select id="knowledge-selector">
-            <option value="">不使用知识库</option>
-          </select>
-        </label>
-
-        <button id="new-session" class="secondary-button" type="button">
-          新建会话
-        </button>
-
-        <p class="security-note">
-          X-User-ID 仅用于本地开发阶段的身份模拟，不是真实登录或认证。
-        </p>
-      </section>
-
-      <section class="chat-panel" aria-label="Agent 对话">
-        <div id="message-list" class="message-list" aria-live="polite"></div>
-
-        <form id="message-form" class="composer">
-          <label class="sr-only" for="message-input">输入消息</label>
-          <textarea
-            id="message-input"
-            rows="3"
-            maxlength="20000"
-            placeholder="输入问题。Enter 发送，Shift + Enter 换行。"
-            required
-          ></textarea>
-          <div class="composer-actions">
-            <div class="connection-status" aria-live="polite">
-              <span id="status-dot" class="status-dot"></span>
-              <span id="status-text">就绪</span>
-            </div>
-            <button id="stop-button" class="stop-button" type="button" disabled>
-              停止
-            </button>
-            <button id="send-button" class="primary-button" type="submit">
-              发送
-            </button>
-          </div>
-        </form>
-      </section>
-      </section>
-
-      <section id="knowledge-view" class="view knowledge-view" hidden>
-        <aside class="knowledge-sidebar">
-          <div class="knowledge-sidebar-heading">
-            <div>
-              <p class="eyebrow">MY KNOWLEDGE BASES</p>
-              <h2>知识库</h2>
-            </div>
-            <button id="show-create-kb" class="primary-button compact" type="button">
-              新建
-            </button>
-          </div>
-
-          <form id="create-kb-form" class="create-kb-form" hidden>
-            <label class="field">
-              <span>名称</span>
-              <input id="kb-name" maxlength="100" required />
-            </label>
-            <label class="field">
-              <span>描述</span>
-              <textarea id="kb-description" maxlength="1000" rows="3"></textarea>
-            </label>
-            <div class="inline-actions">
-              <button class="primary-button compact" type="submit">创建</button>
-              <button id="cancel-create-kb" class="secondary-button compact" type="button">取消</button>
-            </div>
+      <section id="overview-view" class="view workbench-view">
+        <aside class="workbench-sidebar">
+          <div class="section-heading"><div><p class="eyebrow">MY PROJECTS</p><h2>科研项目</h2></div><button id="show-create-project" class="primary-button compact" type="button">新建</button></div>
+          <form id="create-project-form" class="stack-form" hidden>
+            <label class="field"><span>项目名称</span><input id="new-project-name" maxlength="120" required /></label>
+            <label class="field"><span>研究问题</span><textarea id="new-project-question" maxlength="4000" rows="3"></textarea></label>
+            <label class="field"><span>默认知识库</span><select id="new-project-kb"><option value="">暂不绑定</option></select></label>
+            <div class="inline-actions"><button class="primary-button compact" type="submit">创建</button><button id="cancel-create-project" class="secondary-button compact" type="button">取消</button></div>
           </form>
-
-          <div id="knowledge-base-list" class="knowledge-base-list"></div>
+          <div id="project-list" class="entity-list"></div>
         </aside>
-
-        <section class="knowledge-detail" aria-live="polite">
-          <div id="knowledge-empty" class="knowledge-empty">
-            请选择或新建一个知识库。
-          </div>
-
-          <div id="knowledge-content" hidden>
-            <header class="knowledge-detail-heading">
-              <div>
-                <p class="eyebrow">SELECTED KNOWLEDGE BASE</p>
-                <h2 id="selected-kb-name"></h2>
-                <p id="selected-kb-description" class="subtitle"></p>
-                <p id="selected-kb-stats" class="knowledge-stats"></p>
-              </div>
-              <button id="delete-kb" class="danger-button" type="button">
-                删除知识库
-              </button>
-            </header>
-
-            <section
-              id="upload-zone"
-              class="upload-zone"
-              tabindex="0"
-              role="button"
-              aria-label="选择或拖拽文档上传"
-            >
-              <input
-                id="document-files"
-                type="file"
-                accept=".txt,.md,.markdown,.pdf"
-                multiple
-                hidden
-              />
-              <strong>点击选择或拖拽文档到这里</strong>
-              <span>支持 TXT、Markdown、PDF；单文件默认最大 10MB，一次最多 5 个。</span>
-            </section>
-            <p id="upload-status" class="upload-status" aria-live="polite"></p>
-
-            <div class="document-table-wrap">
-              <table class="document-table">
-                <thead>
-                  <tr>
-                    <th>文件名</th>
-                    <th>状态</th>
-                    <th>大小</th>
-                    <th>Chunks</th>
-                    <th>上传时间</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody id="document-table-body"></tbody>
-              </table>
-            </div>
+        <section class="workbench-content">
+          <div id="overview-empty" class="empty-state"><strong>还没有选择科研项目</strong><span>请从左侧选择项目，或创建第一个项目。</span></div>
+          <div id="overview-content" hidden>
+            <div class="section-heading"><div><p class="eyebrow">PROJECT OVERVIEW</p><h2 id="overview-project-name"></h2></div><button id="delete-project" class="danger-button" type="button">删除项目</button></div>
+            <div id="overview-stats" class="stat-grid"></div>
+            <form id="project-edit-form" class="detail-form">
+              <label class="field"><span>名称</span><input id="project-name" maxlength="120" required /></label>
+              <label class="field"><span>状态</span><select id="project-status"><option value="draft">draft</option><option value="active">active</option><option value="archived">archived</option></select></label>
+              <label class="field full"><span>描述</span><textarea id="project-description" maxlength="4000" rows="3"></textarea></label>
+              <label class="field full"><span>研究问题</span><textarea id="project-question" maxlength="4000" rows="3"></textarea></label>
+              <label class="field full"><span>默认知识库</span><select id="project-kb"><option value="">解除绑定</option></select></label>
+              <div class="form-actions full"><button class="primary-button" type="submit">保存项目</button></div>
+            </form>
+            <section class="recent-run-card"><h3>最近一次运行</h3><div id="overview-recent-run"></div></section>
           </div>
         </section>
       </section>
 
-      <footer>
-        X-User-ID 只是开发阶段身份模拟。停止按钮只中断浏览器读取，不保证撤销服务器副作用。
-      </footer>
-    </main>
+      <section id="tasks-view" class="view workbench-view" hidden>
+        <aside class="workbench-sidebar">
+          <div class="section-heading"><div><p class="eyebrow">RESEARCH TASKS</p><h2>科研任务</h2></div><button id="show-create-task" class="primary-button compact" type="button">新建</button></div>
+          <div class="filter-row">
+            <select id="task-status-filter" aria-label="按任务状态筛选"><option value="">全部状态</option><option>pending</option><option>running</option><option>blocked</option><option>completed</option><option>failed</option><option>cancelled</option></select>
+            <select id="task-type-filter" aria-label="按任务类型筛选"><option value="">全部类型</option><option>literature_review</option><option>analysis</option><option>synthesis</option><option>general</option></select>
+          </div>
+          <form id="create-task-form" class="stack-form" hidden>
+            <label class="field"><span>标题</span><input id="new-task-title" maxlength="200" required /></label>
+            <label class="field"><span>任务类型</span><select id="new-task-type"><option>general</option><option>literature_review</option><option>analysis</option><option>synthesis</option></select></label>
+            <label class="field"><span>目标</span><textarea id="new-task-objective" maxlength="8000" rows="3"></textarea></label>
+            <label class="field"><span>验收标准（每行一条）</span><textarea id="new-task-criteria" rows="4"></textarea></label>
+            <div class="inline-actions"><button class="primary-button compact" type="submit">创建</button><button id="cancel-create-task" class="secondary-button compact" type="button">取消</button></div>
+          </form>
+          <div id="task-list" class="entity-list"></div>
+        </aside>
+        <section class="workbench-content">
+          <div id="task-empty" class="empty-state"><strong>还没有科研任务</strong><span>选择项目后创建任务，Agent 运行结果会形成草稿成果。</span></div>
+          <div id="task-content" hidden>
+            <div class="section-heading"><div><p class="eyebrow">TASK DETAIL</p><h2 id="task-detail-title"></h2></div><div class="inline-actions"><button id="start-task" class="primary-button" type="button">启动任务</button><button id="delete-task" class="danger-button" type="button">删除任务</button></div></div>
+            <form id="task-edit-form" class="detail-form">
+              <label class="field"><span>标题</span><input id="task-title" maxlength="200" required /></label>
+              <label class="field"><span>类型</span><select id="task-type"><option>general</option><option>literature_review</option><option>analysis</option><option>synthesis</option></select></label>
+              <label class="field full"><span>目标</span><textarea id="task-objective" maxlength="8000" rows="3"></textarea></label>
+              <label class="field full"><span>验收标准（每行一条）</span><textarea id="task-criteria" rows="4"></textarea></label>
+              <div class="form-actions full"><span id="task-status" class="status-badge"></span><button class="secondary-button" type="submit">保存任务</button></div>
+            </form>
+            <section id="run-live-panel" class="run-live-panel" hidden><div class="section-heading"><h3>实时执行</h3><span id="run-live-status" class="status-badge running"></span></div><ol id="run-timeline" class="run-timeline"></ol><pre id="run-candidate-output" class="candidate-output"></pre></section>
+            <section class="run-history"><h3>AgentRun 历史</h3><div id="run-list"></div></section>
+          </div>
+        </section>
+      </section>
 
+      <section id="artifacts-view" class="view workbench-view" hidden>
+        <aside class="workbench-sidebar">
+          <div class="section-heading"><div><p class="eyebrow">RESEARCH OUTPUTS</p><h2>研究成果</h2></div></div>
+          <div class="filter-row">
+            <select id="artifact-status-filter" aria-label="按成果状态筛选"><option value="">全部状态</option><option>draft</option><option>final</option></select>
+            <select id="artifact-type-filter" aria-label="按成果类型筛选"><option value="">全部类型</option><option>note</option><option>literature_review</option><option>analysis</option><option>report</option></select>
+            <select id="artifact-task-filter" aria-label="按任务筛选"><option value="">全部任务</option></select>
+          </div>
+          <div id="artifact-list" class="entity-list"></div>
+        </aside>
+        <section class="workbench-content">
+          <div id="artifact-empty" class="empty-state"><strong>还没有研究成果</strong><span>科研任务完成或进入人工审阅后，会在这里产生 draft。</span></div>
+          <div id="artifact-content" hidden>
+            <div class="section-heading"><div><p class="eyebrow">ARTIFACT DETAIL</p><h2 id="artifact-detail-title"></h2></div><div id="artifact-actions" class="inline-actions"><button id="finalize-artifact" class="primary-button" type="button">人工定稿</button><button id="delete-artifact" class="danger-button" type="button">删除草稿</button></div></div>
+            <dl id="artifact-meta" class="metadata-grid"></dl>
+            <form id="artifact-edit-form" class="detail-form artifact-form">
+              <label class="field"><span>标题</span><input id="artifact-title" maxlength="240" required /></label>
+              <label class="field"><span>类型</span><select id="artifact-type"><option>note</option><option>literature_review</option><option>analysis</option><option>report</option></select></label>
+              <label class="field full"><span>正文（纯文本）</span><textarea id="artifact-body" rows="16" required></textarea></label>
+              <div class="form-actions full"><button id="save-artifact" class="secondary-button" type="submit">保存草稿</button></div>
+            </form>
+            <section><h3>证据来源</h3><div id="artifact-sources" class="artifact-sources"></div></section>
+            <section id="artifact-issues-section" hidden><h3>未解决问题</h3><ul id="artifact-issues"></ul></section>
+          </div>
+        </section>
+      </section>
+
+      <section id="chat-view" class="view" hidden>
+        <section class="session-panel" aria-label="会话信息">
+          <div class="thread-field"><span>当前 thread_id</span><code id="thread-id"></code></div>
+          <label class="field knowledge-select-field"><span>本轮知识库</span><select id="knowledge-selector"><option value="">不使用知识库</option></select></label>
+          <button id="new-session" class="secondary-button" type="button">新建会话</button>
+          <p class="security-note">新会话不继承旧线程 Checkpoint；相同开发用户仍可使用其长期记忆。</p>
+        </section>
+        <section class="chat-panel" aria-label="Agent 对话">
+          <div id="message-list" class="message-list" aria-live="polite"></div>
+          <form id="message-form" class="composer"><label class="sr-only" for="message-input">输入消息</label><textarea id="message-input" rows="3" maxlength="20000" placeholder="输入问题。Enter 发送，Shift + Enter 换行。" required></textarea><div class="composer-actions"><div class="connection-status"><span id="status-dot" class="status-dot"></span><span id="status-text">就绪</span></div><button id="stop-button" class="stop-button" type="button" disabled>停止</button><button id="send-button" class="primary-button" type="submit">发送</button></div></form>
+        </section>
+      </section>
+
+      <section id="knowledge-view" class="view knowledge-view" hidden>
+        <aside class="knowledge-sidebar">
+          <div class="knowledge-sidebar-heading"><div><p class="eyebrow">MY KNOWLEDGE BASES</p><h2>知识库</h2></div><button id="show-create-kb" class="primary-button compact" type="button">新建</button></div>
+          <form id="create-kb-form" class="create-kb-form" hidden><label class="field"><span>名称</span><input id="kb-name" maxlength="100" required /></label><label class="field"><span>描述</span><textarea id="kb-description" maxlength="1000" rows="3"></textarea></label><div class="inline-actions"><button class="primary-button compact" type="submit">创建</button><button id="cancel-create-kb" class="secondary-button compact" type="button">取消</button></div></form>
+          <div id="knowledge-base-list" class="knowledge-base-list"></div>
+        </aside>
+        <section class="knowledge-detail" aria-live="polite">
+          <div id="knowledge-empty" class="knowledge-empty">请选择或新建一个知识库。</div>
+          <div id="knowledge-content" hidden><header class="knowledge-detail-heading"><div><p class="eyebrow">SELECTED KNOWLEDGE BASE</p><h2 id="selected-kb-name"></h2><p id="selected-kb-description" class="subtitle"></p><p id="selected-kb-stats" class="knowledge-stats"></p></div><button id="delete-kb" class="danger-button" type="button">删除知识库</button></header><section id="upload-zone" class="upload-zone" tabindex="0" role="button" aria-label="选择或拖拽文档上传"><input id="document-files" type="file" accept=".txt,.md,.markdown,.pdf" multiple hidden /><strong>点击选择或拖拽文档到这里</strong><span>支持 TXT、Markdown、PDF；单文件默认最大 10MB，一次最多 5 个。</span></section><p id="upload-status" class="upload-status" aria-live="polite"></p><div class="document-table-wrap"><table class="document-table"><thead><tr><th>文件名</th><th>状态</th><th>大小</th><th>Chunks</th><th>上传时间</th><th>操作</th></tr></thead><tbody id="document-table-body"></tbody></table></div></div>
+        </section>
+      </section>
+
+      <footer>AI Agent Learning 教学项目：X-User-ID 只是开发身份模拟；关闭页面或中断 SSE 读取不代表取消后端科研执行。</footer>
+    </main>
     <script type="module" src="/assets/app.js"></script>
   </body>
 </html>
