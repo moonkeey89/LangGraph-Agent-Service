@@ -1,7 +1,24 @@
 from langchain_core.embeddings import Embeddings
+from typing import Annotated
+
+from fastapi import FastAPI, Header
+
+from ai_agent_learning.api.dependencies import get_user_id
 
 
 TEST_EMBEDDING_DIMENSIONS = 16
+
+
+def install_test_identity(app: FastAPI) -> FastAPI:
+    """Use the legacy header only inside tests through FastAPI's override API."""
+
+    def get_test_user_id(
+        x_user_id: Annotated[str, Header(alias="X-User-ID")],
+    ) -> str:
+        return x_user_id
+
+    app.dependency_overrides[get_user_id] = get_test_user_id
+    return app
 
 
 class DeterministicTestEmbeddings(Embeddings):

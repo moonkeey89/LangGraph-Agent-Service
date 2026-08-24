@@ -2,6 +2,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from ai_agent_learning.agents import build_supervisor_graph
+from ai_agent_learning.auth import (
+    AuthCookieConfig,
+    AuthService,
+    open_auth_catalog,
+    resolve_auth_path,
+)
 from ai_agent_learning.api.service import AgentService
 from ai_agent_learning.checkpoint import open_sqlite_checkpointer
 from ai_agent_learning.config import Settings
@@ -57,7 +63,22 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
                 active_settings.researchflow_database_path
             )
         ) as research_catalog,
+        open_auth_catalog(
+            resolve_auth_path(active_settings.auth_database_path)
+        ) as auth_catalog,
     ):
+        auth_service = AuthService(
+            auth_catalog,
+            AuthCookieConfig(
+                session_cookie_name=active_settings.auth_session_cookie_name,
+                csrf_cookie_name=active_settings.auth_csrf_cookie_name,
+                csrf_header_name=active_settings.auth_csrf_header_name,
+                secure=active_settings.auth_cookie_secure,
+                same_site=active_settings.auth_cookie_samesite,
+                domain=active_settings.auth_cookie_domain,
+                session_ttl_minutes=active_settings.auth_session_ttl_minutes,
+            ),
+        )
         knowledge_ingestor = KnowledgeIngestor(
             knowledge_repository,
             chunk_size=active_settings.knowledge_chunk_size,
@@ -120,4 +141,5 @@ def open_agent_service(settings: Settings | None = None) -> Iterator[AgentServic
             knowledge_service=knowledge_service,
             research_service=research_service,
             research_execution_service=research_execution_service,
+            auth_service=auth_service,
         )

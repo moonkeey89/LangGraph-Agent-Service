@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from ai_agent_learning.api.app import create_app
 from ai_agent_learning.api.service import AgentService
+from tests.helpers import install_test_identity
 from ai_agent_learning.knowledge.models import KnowledgeChunk
 from ai_agent_learning.knowledge.service import KnowledgeNotFoundError
 from ai_agent_learning.research import ResearchCatalog, ResearchService
@@ -72,7 +73,7 @@ class AgentRunApiTests(unittest.TestCase):
             yield AgentService(NoOpGraph(), research_service=self.service)
 
         self.client_context = TestClient(
-            create_app(service_factory),
+            install_test_identity(create_app(service_factory)),
             raise_server_exceptions=False,
         )
         self.client = self.client_context.__enter__()

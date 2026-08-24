@@ -1,7 +1,22 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
+from ai_agent_learning.auth.models import (
+    MAX_EMAIL_LENGTH,
+    MAX_PASSWORD_LENGTH,
+    MAX_USERNAME_LENGTH,
+    MIN_PASSWORD_LENGTH,
+    normalize_email,
+    normalize_username,
+)
 from ai_agent_learning.knowledge.models import validate_knowledge_base_id
 from ai_agent_learning.research.service import (
     MAX_ACCEPTANCE_CRITERIA,
@@ -24,6 +39,58 @@ from ai_agent_learning.research.task_state import (
 MAX_IDENTIFIER_LENGTH = 128
 
 
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=MAX_USERNAME_LENGTH)
+    email: str = Field(min_length=3, max_length=MAX_EMAIL_LENGTH)
+    password: SecretStr = Field(
+        min_length=MIN_PASSWORD_LENGTH,
+        max_length=MAX_PASSWORD_LENGTH,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str) -> str:
+        return normalize_username(value)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+
+class LoginRequest(BaseModel):
+    login: str = Field(min_length=1, max_length=MAX_EMAIL_LENGTH)
+    password: SecretStr = Field(
+        min_length=1,
+        max_length=MAX_PASSWORD_LENGTH,
+    )
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("login")
+    @classmethod
+    def normalize_login(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if not normalized:
+            raise ValueError("登录名不能为空")
+        return normalized
+
+
+class AuthUserResponse(BaseModel):
+    user_id: str
+    username: str
+    email: str
+    is_active: bool
+    created_at: str
+
+
+class LoginResponse(BaseModel):
+    user: AuthUserResponse
+    expires_at: str
+
+
 def _normalized_identifier(value: str, field_name: str) -> str:
     normalized = value.strip()
     if not normalized:
@@ -39,6 +106,8 @@ class InvokeRequest(BaseModel):
     message: str = Field(min_length=1, max_length=20_000)
     thread_id: str = Field(min_length=1, max_length=MAX_IDENTIFIER_LENGTH)
     knowledge_base_id: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
     @field_validator("message")
     @classmethod
@@ -64,6 +133,8 @@ class ResumeRequest(BaseModel):
     decision: Literal["approve", "reject", "retry", "cancel"]
     reason: str | None = Field(default=None, max_length=500)
     knowledge_base_id: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
 
     @field_validator("thread_id")
     @classmethod
@@ -104,6 +175,8 @@ class HealthResponse(BaseModel):
 class CreateKnowledgeBaseRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=1000)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class KnowledgeBaseResponse(BaseModel):

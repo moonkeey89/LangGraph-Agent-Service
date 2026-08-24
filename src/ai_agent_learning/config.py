@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +27,14 @@ class Settings(BaseSettings):
     knowledge_upload_max_file_size_mb: int = 10
     knowledge_upload_max_files: int = 5
     researchflow_database_path: Path = Path("data/researchflow.sqlite")
+    auth_database_path: Path = Path("data/auth.sqlite")
+    auth_session_cookie_name: str = "researchflow_session"
+    auth_csrf_cookie_name: str = "researchflow_csrf"
+    auth_csrf_header_name: str = "X-CSRF-Token"
+    auth_session_ttl_minutes: int = 480
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    auth_cookie_domain: str | None = None
     log_level: str = "INFO"
 
     @field_validator("memory_embedding_dimensions")
@@ -88,6 +97,27 @@ class Settings(BaseSettings):
             raise ValueError(
                 "knowledge_chunk_overlap必须小于knowledge_chunk_size"
             )
+        if self.auth_cookie_samesite == "none" and not self.auth_cookie_secure:
+            raise ValueError("SameSite=None 时必须启用 Secure Cookie")
+
+    @field_validator("auth_session_ttl_minutes")
+    @classmethod
+    def validate_auth_session_ttl(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("认证Session有效期必须是正整数")
+        return value
+
+    @field_validator(
+        "auth_session_cookie_name",
+        "auth_csrf_cookie_name",
+        "auth_csrf_header_name",
+    )
+    @classmethod
+    def validate_auth_names(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("认证Cookie和Header名称不能为空")
+        return normalized
 
     model_config = SettingsConfigDict(
         env_file=".env",

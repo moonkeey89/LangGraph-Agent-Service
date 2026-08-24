@@ -14,6 +14,7 @@ from langgraph.types import Interrupt
 
 from ai_agent_learning.api.app import create_app
 from ai_agent_learning.api.service import AgentService
+from tests.helpers import install_test_identity
 
 
 class StreamingFakeGraph:
@@ -245,7 +246,7 @@ class SseApiTests(unittest.TestCase):
             yield AgentService(self.graph)
 
         self.client_context = TestClient(
-            create_app(service_factory),
+            install_test_identity(create_app(service_factory)),
             raise_server_exceptions=False,
         )
         self.client = self.client_context.__enter__()

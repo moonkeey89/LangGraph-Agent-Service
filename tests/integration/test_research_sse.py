@@ -19,6 +19,7 @@ from ai_agent_learning.research import (
     ResearchExecutionService,
     ResearchService,
 )
+from tests.helpers import install_test_identity
 
 
 TERMINALS = {
@@ -231,7 +232,10 @@ class ResearchSseTests(unittest.TestCase):
                 research_execution_service=execution,
             )
 
-        return TestClient(create_app(factory), raise_server_exceptions=False)
+        return TestClient(
+            install_test_identity(create_app(factory)),
+            raise_server_exceptions=False,
+        )
 
     def stream(self, graph, task, *, user_id="user_001"):
         path = (

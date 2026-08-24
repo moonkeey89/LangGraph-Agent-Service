@@ -47,6 +47,16 @@ class SettingsTests(unittest.TestCase):
             settings.researchflow_database_path.as_posix(),
             "data/researchflow.sqlite",
         )
+        self.assertEqual(
+            settings.auth_database_path.as_posix(),
+            "data/auth.sqlite",
+        )
+        self.assertEqual(settings.auth_session_cookie_name, "researchflow_session")
+        self.assertEqual(settings.auth_csrf_cookie_name, "researchflow_csrf")
+        self.assertEqual(settings.auth_csrf_header_name, "X-CSRF-Token")
+        self.assertEqual(settings.auth_session_ttl_minutes, 480)
+        self.assertFalse(settings.auth_cookie_secure)
+        self.assertEqual(settings.auth_cookie_samesite, "lax")
         self.assertEqual(settings.log_level, "INFO")
         self.assertNotIn("test-secret-key", repr(settings))
 
@@ -71,6 +81,10 @@ class SettingsTests(unittest.TestCase):
             "KNOWLEDGE_UPLOAD_MAX_FILE_SIZE_MB": "8",
             "KNOWLEDGE_UPLOAD_MAX_FILES": "3",
             "RESEARCHFLOW_DATABASE_PATH": "custom/research.sqlite",
+            "AUTH_DATABASE_PATH": "custom/auth.sqlite",
+            "AUTH_SESSION_TTL_MINUTES": "120",
+            "AUTH_COOKIE_SECURE": "true",
+            "AUTH_COOKIE_SAMESITE": "strict",
             "LOG_LEVEL": "debug",
         }
 
@@ -99,6 +113,13 @@ class SettingsTests(unittest.TestCase):
             settings.researchflow_database_path.as_posix(),
             "custom/research.sqlite",
         )
+        self.assertEqual(
+            settings.auth_database_path.as_posix(),
+            "custom/auth.sqlite",
+        )
+        self.assertEqual(settings.auth_session_ttl_minutes, 120)
+        self.assertTrue(settings.auth_cookie_secure)
+        self.assertEqual(settings.auth_cookie_samesite, "strict")
         self.assertEqual(settings.log_level, "DEBUG")
 
     def test_api_key_is_required(self):
@@ -156,6 +177,22 @@ class SettingsTests(unittest.TestCase):
                         deepseek_api_key="test-secret-key",
                         **values,
                     )
+
+    def test_auth_cookie_configuration_is_validated(self):
+        invalid_values = [
+            {"auth_session_ttl_minutes": 0},
+            {"auth_session_cookie_name": " "},
+            {"auth_csrf_cookie_name": " "},
+            {"auth_csrf_header_name": " "},
+            {"auth_cookie_samesite": "none", "auth_cookie_secure": False},
+        ]
+        for values in invalid_values:
+            with self.subTest(values=values), self.assertRaises(ValidationError):
+                Settings(
+                    _env_file=None,
+                    deepseek_api_key="test-secret-key",
+                    **values,
+                )
 
 
 if __name__ == "__main__":

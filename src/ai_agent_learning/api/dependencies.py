@@ -1,11 +1,8 @@
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 
-from ai_agent_learning.api.models import (
-    MAX_IDENTIFIER_LENGTH,
-    _normalized_identifier,
-)
+from ai_agent_learning.auth import AuthenticatedSession, AuthService
 from ai_agent_learning.api.service import AgentService
 from ai_agent_learning.knowledge.service import KnowledgeLibraryService
 from ai_agent_learning.research.service import ResearchService
@@ -22,23 +19,40 @@ def get_agent_service(request: Request) -> AgentService:
     return service
 
 
-def get_user_id(
-    x_user_id: Annotated[
-        str,
-        Header(
-            alias="X-User-ID",
-            min_length=1,
-            max_length=MAX_IDENTIFIER_LENGTH,
-        ),
-    ],
-) -> str:
-    try:
-        return _normalized_identifier(x_user_id, "X-User-ID")
-    except ValueError as error:
+def get_auth_service(request: Request) -> AuthService:
+    service = getattr(request.app.state, "auth_service", None)
+    if not isinstance(service, AuthService):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(error),
-        ) from error
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service is not ready",
+        )
+    return service
+
+
+def get_authenticated_session(
+    request: Request,
+    service: Annotated[AuthService, Depends(get_auth_service)],
+) -> AuthenticatedSession:
+    config = service.cookie_config
+    return service.authenticate(request.cookies.get(config.session_cookie_name))
+
+
+def get_user_id(
+    request: Request,
+    authenticated: Annotated[
+        AuthenticatedSession,
+        Depends(get_authenticated_session),
+    ],
+    service: Annotated[AuthService, Depends(get_auth_service)],
+) -> str:
+    if request.method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+        config = service.cookie_config
+        service.validate_csrf(
+            authenticated,
+            csrf_cookie=request.cookies.get(config.csrf_cookie_name),
+            csrf_header=request.headers.get(config.csrf_header_name),
+        )
+    return authenticated.user.user_id
 
 
 def get_knowledge_service(

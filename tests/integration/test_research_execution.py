@@ -20,6 +20,7 @@ from ai_agent_learning.research import (
     ResearchTaskConflictError,
     ResearchTaskNotFoundError,
 )
+from tests.helpers import install_test_identity
 
 
 class KnowledgeStub:
@@ -372,7 +373,10 @@ class ResearchExecutionApiTests(unittest.TestCase):
                     research_execution_service=execution,
                 )
 
-            with TestClient(create_app(factory), raise_server_exceptions=False) as client:
+            with TestClient(
+                install_test_identity(create_app(factory)),
+                raise_server_exceptions=False,
+            ) as client:
                 path = (
                     f"/api/v1/research/projects/{project.project_id}"
                     f"/tasks/{task.task_id}/runs"

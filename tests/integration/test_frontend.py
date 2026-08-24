@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from ai_agent_learning.api.app import create_app
 from ai_agent_learning.api.service import AgentService
+from tests.helpers import install_test_identity
 
 
 class NeverCalledGraph:
@@ -18,7 +19,9 @@ class FrontendIntegrationTests(unittest.TestCase):
         def service_factory():
             yield AgentService(NeverCalledGraph())
 
-        self.client_context = TestClient(create_app(service_factory))
+        self.client_context = TestClient(
+            install_test_identity(create_app(service_factory))
+        )
         self.client = self.client_context.__enter__()
 
     def tearDown(self):

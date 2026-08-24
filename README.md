@@ -108,28 +108,39 @@ ai-agent-learning-multi
 .venv\Scripts\python -m uvicorn ai_agent_learning.api.app:app --host 127.0.0.1 --port 8000
 ```
 
-FastAPI lifespan 在进程启动时只创建一次 LLM、编译后的 LangGraph、SQLite
+FastAPI lifespan 在进程启动时只创建一次 LLM、编译后的 LangGraph、认证数据库、SQLite
 Checkpointer、长期记忆Store和RAG Chroma客户端，在关闭时释放相应连接。HTTP接口为：
 
 ```text
 GET  /health
+POST /api/v1/auth/register
+POST /api/v1/auth/login
+GET  /api/v1/auth/me
+POST /api/v1/auth/logout
 POST /api/v1/agent/invoke
 POST /api/v1/agent/resume
 POST /api/v1/agent/stream
 ```
 
-`X-User-ID` 是必填可信请求头；`thread_id` 在 JSON 请求体中。首次 API 调用会把
-两者的归属写入 Checkpoint，后续请求无法使用另一个用户接管同一个 thread。
+业务API通过登录后签发的HttpOnly Session Cookie识别用户，`X-User-ID`不再参与
+生产身份判断。Session原始Token只写入Cookie，`data/auth.sqlite`仅保存Token摘要。
+POST、PATCH和DELETE等修改请求还必须同时携带CSRF Cookie对应的`X-CSRF-Token`
+Header。`thread_id`仍在JSON请求体中；首次调用会把可信Session用户与thread的归属
+写入Checkpoint，后续请求无法使用另一个登录用户接管同一个thread。
 已有但不含该归属字段的旧 CLI thread 不会被 API 自动认领，请为 API 使用新的
 `thread_id`。CLI 的原有入口和数据库行为不受影响。
 
-SSE 流式接口使用与 `/invoke` 完全相同的请求体和 `X-User-ID`：
+SSE流式接口使用与`/invoke`相同的Session Cookie和CSRF保护。当前第六阶段A只完成
+后端认证，现有原生JavaScript页面尚未接入注册、登录和CSRF Header，因此未登录时
+调用业务API会收到401；浏览器认证界面将在后续阶段实现。可以先通过`/docs`验证
+注册、登录、`/me`和退出接口。
 
-```powershell
-curl.exe -N -X POST http://127.0.0.1:8000/api/v1/agent/stream `
-  -H "Content-Type: application/json" `
-  -H "X-User-ID: user_001" `
-  -d '{"message":"查询北京天气并计算500乘以3","thread_id":"sse_001"}'
+修改请求的认证链为：
+
+```text
+Session Cookie → Session Token摘要查询 → 过期/撤销/is_active检查
+              → CSRF Cookie + X-CSRF-Token + Session内CSRF摘要校验
+              → 可信user_id → 原有业务隔离链
 ```
 
 响应采用 `text/event-stream`，公开事件依次可能包含：
@@ -154,8 +165,8 @@ http://127.0.0.1:8000/
 
 页面使用原生 HTML、CSS 和 JavaScript，通过 `fetch()` 发送 POST SSE 请求，并从
 `response.body` 持续解析公开事件。它只在 `localStorage` 保存开发阶段的 user ID
-和 thread ID，不保存模型密钥、Checkpoint 或长期记忆。页面中的用户 ID 只是
-`X-User-ID` 的开发模拟，并不等于生产环境认证。
+和 thread ID，不保存模型密钥、Checkpoint 或长期记忆。页面中旧的开发用户ID输入框
+不再具有生产身份作用；第六阶段A暂不修改前端。
 
 首次使用RAG前，先离线索引项目自带的演示文档：
 
@@ -180,7 +191,7 @@ http://127.0.0.1:8000/
 ```
 
 正确答案应包含演示文档中的唯一事实`ORBIT-731`，回答下方显示实际文件来源。当前
-浏览器把选择的ID作为受控请求字段发送，后端会再次检查该知识库属于`X-User-ID`；
+浏览器把选择的ID作为受控请求字段发送，后端会再次检查该知识库属于当前Session用户；
 自然语言和LLM都不能修改所有者或绕过检查。未选择知识库时不会强制执行RAG。
 同一文档再次入库会使用稳定document/chunk ID进行upsert，并删除该文档已失效的旧
 chunk；修改文档后直接重复同一命令即可完成重新索引。
@@ -197,7 +208,14 @@ GET    /api/v1/knowledge-bases/{knowledge_base_id}/documents
 DELETE /api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}
 ```
 
-`X-User-ID`仍然只是教学阶段的模拟身份，不是真实认证。
+测试代码如需模拟用户，只能通过FastAPI `dependency_overrides[get_user_id]`注入；
+生产配置没有启用`X-User-ID`兼容开关。
+
+认证升级不会自动把旧的`moon`、`user_001`等开发数据认领给新账户。新注册账户使用
+服务端生成的`usr_...`标识，因此旧owner字段与新用户天然隔离。安全迁移方式是先备份
+全部data目录，再由明确知道旧owner与目标账户对应关系的离线迁移工具逐项迁移；在该
+工具实现前，建议为新账户重新创建知识库并重新入库文档，不要直接批量修改多个SQLite
+文件或Checkpoint/长期记忆namespace。
 
 程序启动后依次输入用户 ID 和会话 ID；直接回车分别使用 `default_user` 和 `default`。`thread_id` 定位 Checkpoint 会话，`user_id` 定位跨会话长期记忆。同一用户更换 thread 后不会自动继承旧消息，但仍可检索自己已保存且有效的长期事实。输入 `exit` 或 `quit` 退出。
 

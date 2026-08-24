@@ -7,11 +7,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from ai_agent_learning.api.frontend import attach_frontend
+from ai_agent_learning.api.auth_routes import router as auth_router
 from ai_agent_learning.api.knowledge_routes import router as knowledge_router
 from ai_agent_learning.api.research_routes import router as research_router
 from ai_agent_learning.api.resources import open_agent_service
 from ai_agent_learning.api.routes import router
 from ai_agent_learning.api.service import AgentService, AgentServiceError
+from ai_agent_learning.auth import AuthServiceError
 from ai_agent_learning.knowledge.service import KnowledgeServiceError
 from ai_agent_learning.research.service import ResearchServiceError
 
@@ -29,11 +31,13 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         with factory() as service:
             app.state.agent_service = service
+            app.state.auth_service = service.auth_service
             logger.info("FastAPI Agent resources started")
             try:
                 yield
             finally:
                 app.state.agent_service = None
+                app.state.auth_service = None
                 logger.info("FastAPI Agent resources stopped")
 
     application = FastAPI(
@@ -42,6 +46,7 @@ def create_app(
         lifespan=lifespan,
     )
     application.include_router(router)
+    application.include_router(auth_router)
     application.include_router(knowledge_router)
     application.include_router(research_router)
     attach_frontend(application)
@@ -52,6 +57,17 @@ def create_app(
         error: AgentServiceError,
     ) -> JSONResponse:
         logger.warning("Agent service rejected request: %s", type(error).__name__)
+        return JSONResponse(
+            status_code=error.status_code,
+            content={"detail": error.public_message},
+        )
+
+    @application.exception_handler(AuthServiceError)
+    async def handle_auth_service_error(
+        _request: Request,
+        error: AuthServiceError,
+    ) -> JSONResponse:
+        logger.warning("Auth service rejected request: %s", type(error).__name__)
         return JSONResponse(
             status_code=error.status_code,
             content={"detail": error.public_message},
