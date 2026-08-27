@@ -1,13 +1,41 @@
 import { createSseParser, runSseParserSelfTests } from "/assets/sse-parser.js";
-import { ApiError, readJsonResponse } from "/assets/api.js";
+import {
+  ApiError,
+  apiErrorMessage,
+  apiFetch,
+  clearClientCsrfCookie,
+  configureCsrfFromResponse,
+  readJsonResponse,
+  requestJson,
+  runApiClientSelfTests,
+  setAuthStatusHandler
+} from "/assets/api.js";
+import { runAuthStateSelfTests, validRegistration } from "/assets/auth-state.js";
 import { initResearchFlow, runResearchFlowSelfTests } from "/assets/researchflow.js";
 
-const STORAGE_USER_ID = "ai-agent-learning.user-id";
 const STORAGE_THREAD_ID = "ai-agent-learning.thread-id";
 const STORAGE_KNOWLEDGE_BASE_ID = "ai-agent-learning.knowledge-base-id";
+const STORAGE_PROJECT_ID = "researchflow.selected-project";
 
 const elements = {
-  userId: document.querySelector("#user-id"),
+  initializingView: document.querySelector("#initializing-view"),
+  authView: document.querySelector("#auth-view"),
+  workspaceRoot: document.querySelector("#workspace-root"),
+  showLogin: document.querySelector("#show-login"),
+  showRegister: document.querySelector("#show-register"),
+  loginForm: document.querySelector("#login-form"),
+  loginName: document.querySelector("#login-name"),
+  loginPassword: document.querySelector("#login-password"),
+  loginButton: document.querySelector("#login-button"),
+  registerForm: document.querySelector("#register-form"),
+  registerUsername: document.querySelector("#register-username"),
+  registerEmail: document.querySelector("#register-email"),
+  registerPassword: document.querySelector("#register-password"),
+  registerPasswordConfirmation: document.querySelector("#register-password-confirmation"),
+  registerButton: document.querySelector("#register-button"),
+  authMessage: document.querySelector("#auth-message"),
+  currentUsername: document.querySelector("#current-username"),
+  logoutButton: document.querySelector("#logout-button"),
   threadId: document.querySelector("#thread-id"),
   newSession: document.querySelector("#new-session"),
   messageList: document.querySelector("#message-list"),
@@ -49,6 +77,9 @@ const elements = {
 let researchFlow = null;
 
 const state = {
+  authUser: null,
+  authBusy: false,
+  authGeneration: 0,
   threadId: loadThreadId(),
   busy: false,
   pendingApproval: false,
@@ -79,14 +110,6 @@ function loadThreadId() {
   return localStorage.getItem(STORAGE_THREAD_ID) || generateThreadId();
 }
 
-function currentUserId() {
-  return elements.userId.value.trim();
-}
-
-function knowledgeHeaders(extra = {}) {
-  return { "X-User-ID": currentUserId(), ...extra };
-}
-
 function selectedKnowledgeBase() {
   return state.knowledgeBases.find(
     (item) => item.knowledge_base_id === state.selectedKnowledgeBaseId
@@ -112,7 +135,7 @@ function setView(name) {
     view.hidden = viewName !== name;
     navItems[viewName].classList.toggle("active", viewName === name);
   }
-  if (name === "knowledge") {
+  if (name === "knowledge" && state.authUser) {
     void loadKnowledgeBases();
   }
   researchFlow?.activate(name);
@@ -259,13 +282,12 @@ function renderDocuments() {
 }
 
 async function loadKnowledgeBases() {
-  const userId = currentUserId();
-  if (!userId) return;
+  if (!state.authUser) return;
+  const generation = state.authGeneration;
   try {
-    const response = await fetch("/api/v1/knowledge-bases", {
-      headers: knowledgeHeaders()
-    });
+    const response = await apiFetch("/api/v1/knowledge-bases");
     const items = await readJsonResponse(response);
+    if (!state.authUser || generation !== state.authGeneration) return;
     state.knowledgeBases = Array.isArray(items) ? items : [];
     if (!state.knowledgeBases.some(
       (item) => item.knowledge_base_id === state.selectedKnowledgeBaseId
@@ -286,13 +308,18 @@ async function loadKnowledgeBases() {
 async function loadKnowledgeDocuments() {
   const knowledgeBaseId = state.selectedKnowledgeBaseId;
   if (!knowledgeBaseId) return;
+  const generation = state.authGeneration;
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`,
-      { headers: knowledgeHeaders() }
+      {}
     );
     const items = await readJsonResponse(response);
-    if (knowledgeBaseId !== state.selectedKnowledgeBaseId) return;
+    if (
+      !state.authUser ||
+      generation !== state.authGeneration ||
+      knowledgeBaseId !== state.selectedKnowledgeBaseId
+    ) return;
     state.knowledgeDocuments = Array.isArray(items) ? items : [];
     renderDocuments();
   } catch (error) {
@@ -317,7 +344,6 @@ function updateControls() {
   elements.send.disabled = state.busy || state.pendingApproval;
   elements.stop.disabled = state.controller === null;
   elements.input.disabled = state.busy || state.pendingApproval;
-  elements.userId.disabled = state.busy || state.pendingApproval;
   elements.newSession.disabled = state.busy;
   elements.knowledgeSelector.disabled = state.busy || state.pendingApproval;
 }
@@ -499,11 +525,10 @@ async function submitApproval(decision, card, buttons) {
   setBusy(true);
   setStatus("正在恢复暂停任务", "working");
   try {
-    const response = await fetch("/api/v1/agent/resume", {
+    const response = await apiFetch("/api/v1/agent/resume", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "X-User-ID": currentUserId()
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         thread_id: state.threadId,
@@ -537,14 +562,13 @@ async function submitApproval(decision, card, buttons) {
 
 function humanError(error) {
   if (error instanceof ApiError) {
-    if (error.status === 401 || error.status === 403) {
-      return "当前用户无权访问这个会话，请检查用户 ID 或新建会话。";
-    }
+    if (error.status === 401) return "登录会话已失效，请重新登录。";
+    if (error.status === 403) return "安全校验失败，请刷新页面后重试。";
     if (error.status === 409) {
       return "会话状态发生冲突，可能是旧线程或尚有待审批任务。建议处理审批或新建会话。";
     }
     if (error.status === 422) {
-      return "请求参数不符合接口要求，请检查用户 ID、消息和 thread_id。";
+      return "请求参数不符合接口要求，请检查消息和thread_id。";
     }
     if (error.status >= 500) {
       return "Agent 服务暂时不可用，请稍后重试。";
@@ -560,7 +584,7 @@ function humanError(error) {
 function humanStreamError(data) {
   switch (data?.code) {
     case "thread_forbidden":
-      return "当前用户无权访问这个会话。请检查用户 ID，或点击“新建会话”。";
+      return "当前登录用户无权访问这个会话，请点击“新建会话”。";
     case "legacy_thread_conflict":
       return "这是没有网页用户归属的旧线程，不能自动认领。请点击“新建会话”。";
     case "pending_interrupt":
@@ -610,11 +634,10 @@ function handlePublicEvent(item) {
 }
 
 async function readAgentStream(message, signal) {
-  const response = await fetch("/api/v1/agent/stream", {
+  const response = await apiFetch("/api/v1/agent/stream", {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "X-User-ID": currentUserId()
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       message,
@@ -713,9 +736,9 @@ async function createKnowledgeBase(event) {
   if (!name) return;
   state.knowledgeBusy = true;
   try {
-    const response = await fetch("/api/v1/knowledge-bases", {
+    const response = await apiFetch("/api/v1/knowledge-bases", {
       method: "POST",
-      headers: knowledgeHeaders({ "Content-Type": "application/json" }),
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name,
         description: elements.kbDescription.value.trim()
@@ -744,11 +767,10 @@ async function uploadFiles(fileList) {
   const data = new FormData();
   for (const file of files) data.append("files", file, file.name);
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/v1/knowledge-bases/${encodeURIComponent(state.selectedKnowledgeBaseId)}/documents`,
       {
         method: "POST",
-        headers: knowledgeHeaders(),
         body: data
       }
     );
@@ -780,9 +802,9 @@ async function deleteDocument(documentRecord) {
   if (!confirmed) return;
   state.knowledgeBusy = true;
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/v1/knowledge-bases/${encodeURIComponent(state.selectedKnowledgeBaseId)}/documents/${encodeURIComponent(documentRecord.document_id)}`,
-      { method: "DELETE", headers: knowledgeHeaders() }
+      { method: "DELETE" }
     );
     if (!response.ok) await readJsonResponse(response);
     await loadKnowledgeDocuments();
@@ -802,9 +824,9 @@ async function deleteKnowledgeBase() {
   if (!confirmed) return;
   state.knowledgeBusy = true;
   try {
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/v1/knowledge-bases/${encodeURIComponent(current.knowledge_base_id)}`,
-      { method: "DELETE", headers: knowledgeHeaders() }
+      { method: "DELETE" }
     );
     if (!response.ok) await readJsonResponse(response);
     state.selectedKnowledgeBaseId = "";
@@ -825,16 +847,9 @@ elements.form.addEventListener("submit", (event) => {
     return;
   }
   const message = elements.input.value.trim();
-  const userId = currentUserId();
   if (!message) {
     return;
   }
-  if (!userId) {
-    showError("开发用户 ID 不能为空。");
-    elements.userId.focus();
-    return;
-  }
-  localStorage.setItem(STORAGE_USER_ID, userId);
   addMessage("user", "你", message);
   elements.input.value = "";
   void sendMessage(message);
@@ -900,53 +915,221 @@ elements.uploadZone.addEventListener("drop", (event) => {
   void uploadFiles(event.dataTransfer?.files);
 });
 
-elements.userId.addEventListener("change", () => {
-  const userId = currentUserId();
-  if (!userId) {
-    return;
+function setAuthMode(mode, message = "", kind = "error") {
+  const register = mode === "register";
+  elements.showLogin.classList.toggle("active", !register);
+  elements.showRegister.classList.toggle("active", register);
+  elements.loginForm.hidden = register;
+  elements.registerForm.hidden = !register;
+  elements.authMessage.textContent = message;
+  elements.authMessage.dataset.kind = kind;
+  if (!state.authBusy) {
+    (register ? elements.registerUsername : elements.loginName).focus();
   }
-  const previous = localStorage.getItem(STORAGE_USER_ID);
-  localStorage.setItem(STORAGE_USER_ID, userId);
-  if (previous && previous !== userId) {
-    state.knowledgeBases = [];
-    state.knowledgeDocuments = [];
-    state.selectedKnowledgeBaseId = "";
-    localStorage.setItem(STORAGE_KNOWLEDGE_BASE_ID, "");
-    startNewSession();
-    void loadKnowledgeBases();
-    void researchFlow?.handleUserChange();
-  }
-});
+}
 
-function bootstrap() {
-  elements.userId.value = localStorage.getItem(STORAGE_USER_ID) || "moon";
-  localStorage.setItem(STORAGE_USER_ID, elements.userId.value);
+function setAuthBusy(value) {
+  state.authBusy = value;
+  elements.loginButton.disabled = value;
+  elements.registerButton.disabled = value;
+  elements.showLogin.disabled = value;
+  elements.showRegister.disabled = value;
+}
+
+function clearBusinessState() {
+  state.authGeneration += 1;
+  state.controller?.abort();
+  state.controller = null;
+  state.busy = false;
+  state.pendingApproval = false;
+  state.assistantMessage = null;
+  state.progressMessage = null;
+  state.receivedToken = false;
+  state.terminalReceived = false;
+  state.knowledgeBases = [];
+  state.knowledgeDocuments = [];
+  state.selectedKnowledgeBaseId = "";
+  state.threadId = generateThreadId();
+  localStorage.removeItem(STORAGE_THREAD_ID);
+  localStorage.removeItem(STORAGE_KNOWLEDGE_BASE_ID);
+  localStorage.removeItem(STORAGE_PROJECT_ID);
+  clearClientCsrfCookie();
+  elements.threadId.textContent = state.threadId;
+  elements.messageList.replaceChildren();
+  elements.knowledgeBaseList.replaceChildren();
+  elements.documentTableBody.replaceChildren();
+  renderKnowledgeSelector();
+  renderKnowledgeDetail();
+  researchFlow?.reset();
+  updateControls();
+}
+
+function showLoggedOut(message = "请登录后继续。") {
+  state.authUser = null;
+  elements.currentUsername.textContent = "";
+  elements.loginPassword.value = "";
+  elements.registerPassword.value = "";
+  elements.registerPasswordConfirmation.value = "";
+  clearBusinessState();
+  elements.initializingView.hidden = true;
+  elements.workspaceRoot.hidden = true;
+  elements.authView.hidden = false;
+  setAuthMode("login", message);
+}
+
+async function enterWorkspace(user) {
+  state.authUser = user;
+  elements.currentUsername.textContent = user.username;
+  elements.initializingView.hidden = true;
+  elements.authView.hidden = true;
+  elements.workspaceRoot.hidden = false;
   localStorage.setItem(STORAGE_THREAD_ID, state.threadId);
   elements.threadId.textContent = state.threadId;
-  addSystemMessage("页面已就绪。刷新会保留用户和 thread 标识，但不会自动重新渲染历史消息。");
+  elements.messageList.replaceChildren();
+  addSystemMessage("登录会话已恢复。当前页面只会加载此账户拥有的数据。刷新不会自动重绘历史消息。");
   updateControls();
-  void loadKnowledgeBases();
+  setView("overview");
+  await Promise.all([loadKnowledgeBases(), researchFlow?.start()]);
+}
+
+async function restoreSession() {
+  elements.initializingView.hidden = false;
+  elements.authView.hidden = true;
+  elements.workspaceRoot.hidden = true;
+  let user;
+  try {
+    const response = await apiFetch("/api/v1/auth/me", { handleAuthStatus: false });
+    if (response.status === 401) {
+      showLoggedOut("请登录或注册账户后使用ResearchFlow。" );
+      return false;
+    }
+    configureCsrfFromResponse(response);
+    user = await readJsonResponse(response);
+  } catch (error) {
+    showLoggedOut(apiErrorMessage(error, "恢复登录状态"));
+    return false;
+  }
+  await enterWorkspace(user);
+  return true;
+}
+
+function handleAuthStatus(status) {
+  if (status === 401) {
+    showLoggedOut("登录会话已过期或被撤销，请重新登录。" );
+  } else if (status === 403 && state.authUser) {
+    setStatus("安全校验失败，请刷新页面", "error");
+  }
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  if (state.authBusy) return;
+  setAuthBusy(true);
+  elements.authMessage.textContent = "正在登录……";
+  elements.authMessage.dataset.kind = "";
+  try {
+    await requestJson("/api/v1/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      handleAuthStatus: false,
+      body: JSON.stringify({
+        login: elements.loginName.value.trim(),
+        password: elements.loginPassword.value
+      })
+    });
+    elements.loginPassword.value = "";
+    await restoreSession();
+  } catch (error) {
+    elements.loginPassword.value = "";
+    setAuthMode("login", apiErrorMessage(error, "登录"));
+  } finally {
+    setAuthBusy(false);
+  }
+}
+
+async function submitRegistration(event) {
+  event.preventDefault();
+  if (state.authBusy) return;
+  const values = {
+    username: elements.registerUsername.value.trim(),
+    email: elements.registerEmail.value.trim(),
+    password: elements.registerPassword.value,
+    passwordConfirmation: elements.registerPasswordConfirmation.value
+  };
+  if (!validRegistration(values)) {
+    setAuthMode("register", "请填写有效用户名和邮箱；密码至少8位且两次输入必须一致。" );
+    return;
+  }
+  setAuthBusy(true);
+  try {
+    await requestJson("/api/v1/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      handleAuthStatus: false,
+      body: JSON.stringify({ username: values.username, email: values.email, password: values.password })
+    });
+    elements.registerForm.reset();
+    elements.loginName.value = values.username;
+    setAuthMode("login", "注册成功。6A后端不会自动登录，请使用新账户登录。", "success");
+  } catch (error) {
+    setAuthMode("register", apiErrorMessage(error, "注册"));
+  } finally {
+    elements.registerPassword.value = "";
+    elements.registerPasswordConfirmation.value = "";
+    setAuthBusy(false);
+  }
+}
+
+async function logout() {
+  if (!state.authUser || state.authBusy) return;
+  setAuthBusy(true);
+  elements.logoutButton.disabled = true;
+  try {
+    const response = await apiFetch("/api/v1/auth/logout", { method: "POST" });
+    if (!response.ok) await readJsonResponse(response);
+    showLoggedOut("已安全退出，服务端Session已经撤销。" );
+  } catch (error) {
+    if (state.authUser) showError(apiErrorMessage(error, "退出登录"));
+  } finally {
+    elements.logoutButton.disabled = false;
+    setAuthBusy(false);
+  }
+}
+
+elements.showLogin.addEventListener("click", () => setAuthMode("login"));
+elements.showRegister.addEventListener("click", () => setAuthMode("register"));
+elements.loginForm.addEventListener("submit", submitLogin);
+elements.registerForm.addEventListener("submit", submitRegistration);
+elements.logoutButton.addEventListener("click", () => void logout());
+
+function bootstrap() {
   researchFlow = initResearchFlow({
-    getUserId: currentUserId,
     navigate: setView
   });
-  setView("overview");
+  setAuthStatusHandler(handleAuthStatus);
 
   try {
     const passed = runSseParserSelfTests();
     console.info("SSE parser browser self-tests passed", passed);
     const researchPassed = runResearchFlowSelfTests();
     console.info("ResearchFlow browser self-tests passed", researchPassed);
+    const authPassed = runAuthStateSelfTests();
+    console.info("Auth browser self-tests passed", authPassed);
+    const apiPassed = runApiClientSelfTests();
+    console.info("Authenticated API browser self-tests passed", apiPassed);
   } catch (error) {
     console.error(error);
     showError("浏览器SSE解析器自检失败，请查看Console并停止使用当前页面。");
   }
+  void restoreSession();
 }
 
 window.AiAgentFrontendTests = {
   createSseParser,
   runSseParserSelfTests,
-  runResearchFlowSelfTests
+  runResearchFlowSelfTests,
+  runAuthStateSelfTests,
+  runApiClientSelfTests
 };
 
 bootstrap();

@@ -130,10 +130,11 @@ Header。`thread_id`仍在JSON请求体中；首次调用会把可信Session用�
 已有但不含该归属字段的旧 CLI thread 不会被 API 自动认领，请为 API 使用新的
 `thread_id`。CLI 的原有入口和数据库行为不受影响。
 
-SSE流式接口使用与`/invoke`相同的Session Cookie和CSRF保护。当前第六阶段A只完成
-后端认证，现有原生JavaScript页面尚未接入注册、登录和CSRF Header，因此未登录时
-调用业务API会收到401；浏览器认证界面将在后续阶段实现。可以先通过`/docs`验证
-注册、登录、`/me`和退出接口。
+SSE流式接口使用与`/invoke`相同的Session Cookie和CSRF保护。原生JavaScript页面
+启动时先调用`/api/v1/auth/me`恢复会话；未登录时只显示登录/注册界面，不加载项目、
+任务、成果、知识库或Agent数据。注册只创建账户，随后需要登录。登录成功后服务端设置
+HttpOnly Session Cookie和可由前端读取的CSRF Cookie，所有修改请求由统一请求层自动
+补充服务端声明的CSRF Header。
 
 修改请求的认证链为：
 
@@ -164,9 +165,10 @@ http://127.0.0.1:8000/
 ```
 
 页面使用原生 HTML、CSS 和 JavaScript，通过 `fetch()` 发送 POST SSE 请求，并从
-`response.body` 持续解析公开事件。它只在 `localStorage` 保存开发阶段的 user ID
-和 thread ID，不保存模型密钥、Checkpoint 或长期记忆。页面中旧的开发用户ID输入框
-不再具有生产身份作用；第六阶段A暂不修改前端。
+`response.body` 持续解析公开事件。页面不再保存或发送开发阶段的user ID，也不能读取
+HttpOnly Session Token。`localStorage`只保存当前thread和非敏感的页面选择；退出、
+Session失效或切换账户时会清除当前Project、Task、Artifact、Run、知识库与会话显示状态。
+前端不会保存模型密钥、Checkpoint、密码或长期记忆正文。
 
 首次使用RAG前，先离线索引项目自带的演示文档：
 

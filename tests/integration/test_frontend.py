@@ -32,6 +32,7 @@ class FrontendIntegrationTests(unittest.TestCase):
         script = self.client.get("/assets/app.js")
         parser = self.client.get("/assets/sse-parser.js")
         api_module = self.client.get("/assets/api.js")
+        auth_state = self.client.get("/assets/auth-state.js")
         research_module = self.client.get("/assets/researchflow.js")
         research_state = self.client.get("/assets/researchflow-state.js")
         styles = self.client.get("/assets/styles.css")
@@ -40,6 +41,12 @@ class FrontendIntegrationTests(unittest.TestCase):
         self.assertIn("text/html", page.headers["content-type"])
         self.assertIn("AI Agent Learning", page.text)
         self.assertIn("ResearchFlow", page.text)
+        self.assertIn('id="initializing-view"', page.text)
+        self.assertIn('id="auth-view"', page.text)
+        self.assertIn('id="workspace-root"', page.text)
+        self.assertIn('id="login-form"', page.text)
+        self.assertIn('id="register-form"', page.text)
+        self.assertIn('id="logout-button"', page.text)
         self.assertIn('/assets/app.js', page.text)
         self.assertIn('/assets/styles.css', page.text)
 
@@ -57,10 +64,22 @@ class FrontendIntegrationTests(unittest.TestCase):
         self.assertIn("FormData", script.text)
         self.assertIn("dragover", script.text)
         self.assertIn("initResearchFlow", script.text)
+        self.assertIn('/api/v1/auth/me', script.text)
+        self.assertIn('/api/v1/auth/register', script.text)
+        self.assertIn('/api/v1/auth/login', script.text)
+        self.assertIn('/api/v1/auth/logout', script.text)
+        self.assertIn("clearBusinessState", script.text)
+        self.assertIn("restoreSession", script.text)
 
         self.assertEqual(api_module.status_code, 200)
         self.assertIn("ApiError", api_module.text)
-        self.assertIn("X-User-ID", api_module.text)
+        self.assertIn('credentials: "same-origin"', api_module.text)
+        self.assertIn("X-CSRF-Token", api_module.text)
+        self.assertIn("authenticatedHeaders", api_module.text)
+
+        self.assertEqual(auth_state.status_code, 200)
+        self.assertIn("validRegistration", auth_state.text)
+        self.assertIn("runAuthStateSelfTests", auth_state.text)
 
         self.assertEqual(research_module.status_code, 200)
         self.assertIn("/runs/stream", research_module.text)
@@ -111,6 +130,7 @@ class FrontendIntegrationTests(unittest.TestCase):
 
     def test_frontend_uses_safe_text_rendering_and_no_secret(self):
         script = self.client.get("/assets/app.js").text
+        api_script = self.client.get("/assets/api.js").text
         research_script = self.client.get("/assets/researchflow.js").text
         page = self.client.get("/").text
 
@@ -122,6 +142,54 @@ class FrontendIntegrationTests(unittest.TestCase):
         self.assertNotIn("DEEPSEEK_API_KEY", page)
         self.assertNotIn("DEEPSEEK_API_KEY", research_script)
         self.assertNotIn("sk-", script)
+        self.assertNotIn("X-User-ID", page)
+        self.assertNotIn("X-User-ID", script)
+        self.assertNotIn("X-User-ID", api_script)
+        self.assertNotIn("X-User-ID", research_script)
+        self.assertNotIn('id="user-id"', page)
+        self.assertNotIn("STORAGE_USER_ID", script)
+        self.assertNotIn("sessionStorage", script)
+        self.assertNotIn("session_token", script.lower())
+
+    def test_auth_gate_prevents_eager_business_loading(self):
+        page = self.client.get("/").text
+        script = self.client.get("/assets/app.js").text
+        research_script = self.client.get("/assets/researchflow.js").text
+
+        self.assertIn('id="workspace-root" class="app-shell" aria-labelledby="page-title" hidden', page)
+        self.assertIn('id="auth-view" class="auth-shell" hidden', page)
+        self.assertIn('apiFetch("/api/v1/auth/me"', script)
+        self.assertIn("await enterWorkspace(user)", script)
+        self.assertIn("enabled: false", research_script)
+        self.assertIn("async function start()", research_script)
+        self.assertIn("await loadProjects()", research_script)
+
+    def test_all_business_requests_use_the_shared_authenticated_client(self):
+        script = self.client.get("/assets/app.js").text
+        research_script = self.client.get("/assets/researchflow.js").text
+        api_script = self.client.get("/assets/api.js").text
+
+        self.assertNotIn("fetch(\"/api/v1", script)
+        self.assertNotIn("fetch(\"/api/v1", research_script)
+        self.assertEqual(api_script.count("fetch(path"), 1)
+        self.assertIn("apiFetch(\"/api/v1/agent/stream\"", script)
+        self.assertIn("apiFetch(\"/api/v1/agent/resume\"", script)
+        self.assertIn("/runs/stream", research_script)
+
+    def test_logout_and_session_failure_clear_user_scoped_browser_state(self):
+        script = self.client.get("/assets/app.js").text
+        research_script = self.client.get("/assets/researchflow.js").text
+
+        self.assertIn('apiFetch("/api/v1/auth/logout"', script)
+        self.assertIn("state.controller?.abort()", script)
+        self.assertIn("state.knowledgeBases = []", script)
+        self.assertIn("state.knowledgeDocuments = []", script)
+        self.assertIn("localStorage.removeItem(STORAGE_THREAD_ID)", script)
+        self.assertIn("localStorage.removeItem(STORAGE_KNOWLEDGE_BASE_ID)", script)
+        self.assertIn("localStorage.removeItem(STORAGE_PROJECT_ID)", script)
+        self.assertIn("researchFlow?.reset()", script)
+        self.assertIn("state.streamController?.abort()", research_script)
+        self.assertIn("elements.runTimeline.replaceChildren()", research_script)
 
     def test_research_workbench_structure_is_available(self):
         page = self.client.get("/").text

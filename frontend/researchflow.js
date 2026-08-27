@@ -53,22 +53,11 @@ function encode(value) {
   return encodeURIComponent(value);
 }
 
-function selectedProjectRecord(userId, projectId) {
-  return JSON.stringify({ user_id: userId, project_id: projectId });
+function readStoredProject() {
+  return localStorage.getItem(SELECTED_PROJECT_STORAGE) || "";
 }
 
-function readStoredProject(userId) {
-  try {
-    const value = JSON.parse(localStorage.getItem(SELECTED_PROJECT_STORAGE) || "null");
-    return value?.user_id === userId && typeof value?.project_id === "string"
-      ? value.project_id
-      : "";
-  } catch {
-    return "";
-  }
-}
-
-export function initResearchFlow({ getUserId, navigate }) {
+export function initResearchFlow({ navigate }) {
   const elements = {
     selector: query("#project-selector"),
     serviceStatus: query("#service-status"),
@@ -152,12 +141,11 @@ export function initResearchFlow({ getUserId, navigate }) {
     selectedArtifactId: "",
     activeView: "overview",
     startInFlight: new Set(),
-    busy: false
+    busy: false,
+    enabled: false,
+    generation: 0,
+    streamController: null
   };
-
-  function userId() {
-    return getUserId().trim();
-  }
 
   function project() {
     return state.projects.find((item) => item.project_id === state.selectedProjectId) || null;
@@ -220,7 +208,10 @@ export function initResearchFlow({ getUserId, navigate }) {
   }
 
   async function loadKnowledgeBases() {
-    const items = await requestJson("/api/v1/knowledge-bases", { userId: userId() });
+    if (!state.enabled) return;
+    const generation = state.generation;
+    const items = await requestJson("/api/v1/knowledge-bases");
+    if (!state.enabled || generation !== state.generation) return;
     state.knowledgeBases = Array.isArray(items) ? items : [];
     populateKnowledgeSelect(elements.newProjectKb, "", "暂不绑定");
     populateKnowledgeSelect(elements.projectKb, project()?.default_knowledge_base_id || "", "解除绑定");
@@ -313,18 +304,18 @@ export function initResearchFlow({ getUserId, navigate }) {
   }
 
   async function loadProjects({ restore = true } = {}) {
-    const currentUser = userId();
-    if (!currentUser) return;
+    if (!state.enabled) return;
+    const generation = state.generation;
     showNotice("");
     elements.projectList.replaceChildren(createElement("p", "empty-copy", "正在加载科研项目……"));
     try {
       const [projects] = await Promise.all([
-        requestJson("/api/v1/research/projects", { userId: currentUser }),
+        requestJson("/api/v1/research/projects"),
         loadKnowledgeBases()
       ]);
-      if (currentUser !== userId()) return;
+      if (!state.enabled || generation !== state.generation) return;
       state.projects = Array.isArray(projects) ? projects : [];
-      const restored = restore ? readStoredProject(currentUser) : "";
+      const restored = restore ? readStoredProject() : "";
       const candidate = state.selectedProjectId || restored;
       state.selectedProjectId = state.projects.some((item) => item.project_id === candidate)
         ? candidate
@@ -354,7 +345,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     state.selectedProjectId = exists ? projectId : "";
     state.selectedTaskId = "";
     state.selectedArtifactId = "";
-    localStorage.setItem(SELECTED_PROJECT_STORAGE, selectedProjectRecord(userId(), state.selectedProjectId));
+    localStorage.setItem(SELECTED_PROJECT_STORAGE, state.selectedProjectId);
     renderProjectSelector();
     renderProjectList();
     if (state.selectedProjectId) await loadProjectWorkspace();
@@ -364,23 +355,24 @@ export function initResearchFlow({ getUserId, navigate }) {
   async function loadProjectWorkspace() {
     const projectId = state.selectedProjectId;
     if (!projectId) return clearProjectWorkspace();
+    const generation = state.generation;
     elements.taskList.replaceChildren(createElement("p", "empty-copy", "正在加载科研任务……"));
     elements.artifactList.replaceChildren(createElement("p", "empty-copy", "正在加载研究成果……"));
     try {
       const [tasks, artifacts] = await Promise.all([
-        requestJson(projectPath("/tasks"), { userId: userId() }),
-        requestJson(projectPath("/artifacts"), { userId: userId() })
+        requestJson(projectPath("/tasks")),
+        requestJson(projectPath("/artifacts"))
       ]);
-      if (projectId !== state.selectedProjectId) return;
+      if (!state.enabled || generation !== state.generation || projectId !== state.selectedProjectId) return;
       state.tasks = Array.isArray(tasks) ? tasks : [];
       state.artifacts = Array.isArray(artifacts) ? artifacts : [];
       const runEntries = await Promise.all(
         state.tasks.map(async (item) => [
           item.task_id,
-          await requestJson(projectPath(`/tasks/${encode(item.task_id)}/runs`), { userId: userId() })
+          await requestJson(projectPath(`/tasks/${encode(item.task_id)}/runs`))
         ])
       );
-      if (projectId !== state.selectedProjectId) return;
+      if (!state.enabled || generation !== state.generation || projectId !== state.selectedProjectId) return;
       state.runsByTask = new Map(runEntries);
       if (!state.tasks.some((item) => item.task_id === state.selectedTaskId)) state.selectedTaskId = "";
       if (!state.artifacts.some((item) => item.artifact_id === state.selectedArtifactId)) state.selectedArtifactId = "";
@@ -573,7 +565,6 @@ export function initResearchFlow({ getUserId, navigate }) {
     setBusy(true);
     try {
       const created = await requestJson("/api/v1/research/projects", {
-        userId: userId(),
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -600,7 +591,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     setBusy(true);
     try {
       const updated = await requestJson(projectPath(), {
-        userId: userId(), method: "PATCH", headers: { "Content-Type": "application/json" },
+        method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: elements.projectName.value.trim(),
           description: elements.projectDescription.value.trim(),
@@ -624,7 +615,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     if (!globalThis.confirm(`确定删除科研项目“${current.name}”吗？存在 Task、Artifact 或 Run 时后端会拒绝删除。`)) return;
     setBusy(true);
     try {
-      const response = await apiFetch(projectPath(), { userId: userId(), method: "DELETE" });
+      const response = await apiFetch(projectPath(), { method: "DELETE" });
       if (!response.ok) await readJsonResponse(response);
       state.selectedProjectId = "";
       localStorage.removeItem(SELECTED_PROJECT_STORAGE);
@@ -640,7 +631,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     setBusy(true);
     try {
       const created = await requestJson(projectPath("/tasks"), {
-        userId: userId(), method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: elements.newTaskTitle.value.trim(),
           objective: elements.newTaskObjective.value.trim(),
@@ -663,7 +654,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     setBusy(true);
     try {
       await requestJson(projectPath(`/tasks/${encode(current.task_id)}`), {
-        userId: userId(), method: "PATCH", headers: { "Content-Type": "application/json" },
+        method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: elements.taskTitle.value.trim(), objective: elements.taskObjective.value.trim(), task_type: elements.taskType.value, acceptance_criteria: criteriaFromText(elements.taskCriteria.value) })
       });
       await loadProjectWorkspace();
@@ -678,7 +669,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     if (!globalThis.confirm(`确定删除任务“${current.title}”吗？只有 pending/cancelled 且没有成果或 Run 引用时允许删除。`)) return;
     setBusy(true);
     try {
-      const response = await apiFetch(projectPath(`/tasks/${encode(current.task_id)}`), { userId: userId(), method: "DELETE" });
+      const response = await apiFetch(projectPath(`/tasks/${encode(current.task_id)}`), { method: "DELETE" });
       if (!response.ok) await readJsonResponse(response);
       state.selectedTaskId = ""; await loadProjectWorkspace();
       showNotice("任务已删除。", "success");
@@ -736,8 +727,9 @@ export function initResearchFlow({ getUserId, navigate }) {
   }
 
   async function consumeResearchStream(currentTask) {
+    state.streamController = new AbortController();
     const response = await apiFetch(projectPath(`/tasks/${encode(currentTask.task_id)}/runs/stream`), {
-      userId: userId(), method: "POST", headers: { Accept: "text/event-stream" }
+      method: "POST", headers: { Accept: "text/event-stream" }, signal: state.streamController.signal
     });
     if (!response.ok) await readJsonResponse(response);
     if (!response.body) throw new Error("浏览器没有提供可读取的 SSE 响应体。");
@@ -757,6 +749,7 @@ export function initResearchFlow({ getUserId, navigate }) {
       else throw new Error("SSE 连接已结束，但没有收到 ResearchFlow 终止事件。后端可能仍在执行，请刷新 Run 状态。" );
     } finally {
       reader.releaseLock();
+      state.streamController = null;
     }
     return execution;
   }
@@ -780,8 +773,10 @@ export function initResearchFlow({ getUserId, navigate }) {
       renderTasks(); renderArtifacts();
     } catch (error) {
       showNotice(`${apiErrorMessage(error, "启动科研任务")} 浏览器中断不等于业务取消，正在重新查询持久化状态。`);
-      await loadProjectWorkspace();
-      state.selectedTaskId = current.task_id; renderTasks();
+      if (state.enabled) {
+        await loadProjectWorkspace();
+        state.selectedTaskId = current.task_id; renderTasks();
+      }
     } finally {
       state.startInFlight.delete(current.task_id);
       renderTaskDetail();
@@ -795,7 +790,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     setBusy(true);
     try {
       await requestJson(projectPath(`/artifacts/${encode(current.artifact_id)}`), {
-        userId: userId(), method: "PATCH", headers: { "Content-Type": "application/json" },
+        method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: elements.artifactTitle.value.trim(), artifact_type: elements.artifactType.value, content: elements.artifactBody.value.trim() })
       });
       await loadProjectWorkspace();
@@ -810,7 +805,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     if (!globalThis.confirm("定稿后不能直接修改或删除，是否继续？")) return;
     setBusy(true);
     try {
-      await requestJson(projectPath(`/artifacts/${encode(current.artifact_id)}/finalize`), { userId: userId(), method: "POST" });
+      await requestJson(projectPath(`/artifacts/${encode(current.artifact_id)}/finalize`), { method: "POST" });
       await loadProjectWorkspace();
       showNotice("成果已经人工定稿。", "success");
     } catch (error) { showNotice(apiErrorMessage(error, "定稿成果")); }
@@ -823,7 +818,7 @@ export function initResearchFlow({ getUserId, navigate }) {
     if (!globalThis.confirm(`确定删除草稿“${current.title}”吗？证据文档和知识库不会被删除。`)) return;
     setBusy(true);
     try {
-      const response = await apiFetch(projectPath(`/artifacts/${encode(current.artifact_id)}`), { userId: userId(), method: "DELETE" });
+      const response = await apiFetch(projectPath(`/artifacts/${encode(current.artifact_id)}`), { method: "DELETE" });
       if (!response.ok) await readJsonResponse(response);
       state.selectedArtifactId = ""; await loadProjectWorkspace();
       showNotice("成果草稿已删除。", "success");
@@ -833,19 +828,36 @@ export function initResearchFlow({ getUserId, navigate }) {
 
   function activate(viewName) {
     state.activeView = viewName;
-    if (["overview", "tasks", "artifacts"].includes(viewName)) {
+    if (state.enabled && ["overview", "tasks", "artifacts"].includes(viewName)) {
       if (!state.projects.length) void loadProjects();
       else if (state.selectedProjectId) void loadProjectWorkspace();
     }
   }
 
-  async function handleUserChange() {
+  function reset() {
+    state.enabled = false;
+    state.generation += 1;
+    state.streamController?.abort();
+    state.streamController = null;
+    state.startInFlight.clear();
     state.selectedProjectId = "";
     localStorage.removeItem(SELECTED_PROJECT_STORAGE);
     state.projects = [];
+    state.knowledgeBases = [];
     clearProjectWorkspace();
+    elements.runLivePanel.hidden = true;
+    elements.runTimeline.replaceChildren();
+    elements.runCandidateOutput.textContent = "";
+    elements.runLiveStatus.textContent = "";
     renderProjectSelector(); renderProjectList();
-    await loadProjects({ restore: false });
+    showNotice("");
+  }
+
+  async function start() {
+    state.enabled = true;
+    state.generation += 1;
+    await checkHealth();
+    await loadProjects();
   }
 
   elements.selector.addEventListener("change", () => void selectProject(elements.selector.value));
@@ -874,12 +886,10 @@ export function initResearchFlow({ getUserId, navigate }) {
     else void loadProjects();
   });
 
-  void checkHealth();
-  void loadProjects();
-
   return {
     activate,
-    handleUserChange,
+    start,
+    reset,
     refreshKnowledgeBases: loadKnowledgeBases,
     refresh: loadProjectWorkspace,
     selfTests: runResearchFlowSelfTests

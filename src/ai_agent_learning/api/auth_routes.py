@@ -18,6 +18,8 @@ from ai_agent_learning.auth.models import from_utc_text
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
+CSRF_COOKIE_CONTRACT_HEADER = "X-ResearchFlow-CSRF-Cookie"
+CSRF_HEADER_CONTRACT_HEADER = "X-ResearchFlow-CSRF-Header"
 
 
 def _user_response(user: User) -> AuthUserResponse:
@@ -52,6 +54,13 @@ def _set_auth_cookies(response: Response, service: AuthService, issued) -> None:
         httponly=False,
         **common,
     )
+    _set_csrf_contract_headers(response, service)
+
+
+def _set_csrf_contract_headers(response: Response, service: AuthService) -> None:
+    config = service.cookie_config
+    response.headers[CSRF_COOKIE_CONTRACT_HEADER] = config.csrf_cookie_name
+    response.headers[CSRF_HEADER_CONTRACT_HEADER] = config.csrf_header_name
 
 
 def _clear_auth_cookies(response: Response, service: AuthService) -> None:
@@ -108,11 +117,14 @@ async def login(
 
 @router.get("/me", response_model=AuthUserResponse)
 async def me(
+    response: Response,
     authenticated: Annotated[
         AuthenticatedSession,
         Depends(get_authenticated_session),
     ],
+    service: Annotated[AuthService, Depends(get_auth_service)],
 ) -> AuthUserResponse:
+    _set_csrf_contract_headers(response, service)
     return _user_response(authenticated.user)
 
 

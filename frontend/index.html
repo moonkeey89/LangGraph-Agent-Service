@@ -8,27 +8,61 @@
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
-    <main class="app-shell" aria-labelledby="page-title">
+    <section id="initializing-view" class="auth-shell" aria-live="polite">
+      <div class="auth-card auth-loading">
+        <p class="eyebrow">RESEARCHFLOW SESSION</p>
+        <h1>正在恢复登录状态</h1>
+        <p>正在通过安全Cookie检查现有会话，请稍候……</p>
+      </div>
+    </section>
+
+    <section id="auth-view" class="auth-shell" hidden aria-labelledby="auth-title">
+      <div class="auth-card">
+        <p class="eyebrow">RESEARCHFLOW ACCOUNT</p>
+        <h1 id="auth-title">登录 ResearchFlow</h1>
+        <p class="subtitle">登录后才能访问你的科研项目、知识库和Agent运行记录。</p>
+        <div class="auth-tabs" role="tablist" aria-label="认证方式">
+          <button id="show-login" class="auth-tab active" type="button" role="tab">登录</button>
+          <button id="show-register" class="auth-tab" type="button" role="tab">注册</button>
+        </div>
+        <form id="login-form" class="auth-form">
+          <label class="field"><span>用户名或邮箱</span><input id="login-name" autocomplete="username" maxlength="254" required /></label>
+          <label class="field"><span>密码</span><input id="login-password" type="password" autocomplete="current-password" maxlength="128" required /></label>
+          <button id="login-button" class="primary-button" type="submit">登录</button>
+        </form>
+        <form id="register-form" class="auth-form" hidden>
+          <label class="field"><span>用户名</span><input id="register-username" autocomplete="username" minlength="3" maxlength="64" pattern="[A-Za-z0-9_.-]+" required /></label>
+          <label class="field"><span>邮箱</span><input id="register-email" type="email" autocomplete="email" maxlength="254" required /></label>
+          <label class="field"><span>密码（至少8位）</span><input id="register-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /></label>
+          <label class="field"><span>确认密码</span><input id="register-password-confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /></label>
+          <button id="register-button" class="primary-button" type="submit">创建账户</button>
+        </form>
+        <p id="auth-message" class="auth-message" aria-live="polite"></p>
+        <p class="security-note">Session由服务端保存在HttpOnly Cookie中；页面不会读取或保存Session Token。</p>
+      </div>
+    </section>
+
+    <main id="workspace-root" class="app-shell" aria-labelledby="page-title" hidden>
       <header class="topbar">
         <div>
           <p class="eyebrow">LANGGRAPH RESEARCH WORKBENCH</p>
           <h1 id="page-title">ResearchFlow</h1>
           <p class="subtitle">科研知识管理、多 Agent 任务协作与成果审阅工作台</p>
         </div>
-        <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">API 文档</a>
+        <div class="topbar-actions">
+          <div class="account-summary"><span>当前用户</span><strong id="current-username"></strong></div>
+          <button id="logout-button" class="secondary-button" type="button">退出登录</button>
+          <a class="docs-link" href="/docs" target="_blank" rel="noreferrer">API 文档</a>
+        </div>
       </header>
 
       <section class="workspace-context" aria-label="工作台上下文">
-        <label class="field">
-          <span>开发用户 X-User-ID</span>
-          <input id="user-id" type="text" maxlength="128" autocomplete="off" value="moon" />
-        </label>
         <label class="field">
           <span>当前科研项目</span>
           <select id="project-selector"><option value="">尚未选择项目</option></select>
         </label>
         <div class="service-indicator"><span>服务状态</span><strong id="service-status" data-kind="working">正在检查</strong></div>
-        <p class="security-note">X-User-ID 仅用于本地开发阶段身份模拟，不是真实登录或认证。</p>
+        <p class="security-note">用户身份来自服务端Session；浏览器不能指定业务数据所有者。</p>
       </section>
 
       <nav class="main-nav" aria-label="主导航">
@@ -135,7 +169,7 @@
           <div class="thread-field"><span>当前 thread_id</span><code id="thread-id"></code></div>
           <label class="field knowledge-select-field"><span>本轮知识库</span><select id="knowledge-selector"><option value="">不使用知识库</option></select></label>
           <button id="new-session" class="secondary-button" type="button">新建会话</button>
-          <p class="security-note">新会话不继承旧线程 Checkpoint；相同开发用户仍可使用其长期记忆。</p>
+          <p class="security-note">新会话不继承旧线程 Checkpoint；同一登录用户仍可使用其长期记忆。</p>
         </section>
         <section class="chat-panel" aria-label="Agent 对话">
           <div id="message-list" class="message-list" aria-live="polite"></div>
@@ -155,7 +189,7 @@
         </section>
       </section>
 
-      <footer>AI Agent Learning 教学项目：X-User-ID 只是开发身份模拟；关闭页面或中断 SSE 读取不代表取消后端科研执行。</footer>
+      <footer>AI Agent Learning 教学项目：关闭页面或中断SSE读取不代表取消后端科研执行。</footer>
     </main>
     <script type="module" src="/assets/app.js"></script>
   </body>

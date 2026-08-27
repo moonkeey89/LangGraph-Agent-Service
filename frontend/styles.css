@@ -19,6 +19,73 @@ body {
     #eef2f7;
 }
 
+[hidden] {
+  display: none !important;
+}
+
+.auth-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: min(430px, 100%);
+  padding: 32px;
+  border: 1px solid #d8e0eb;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 20px 58px rgba(31, 44, 70, 0.12);
+}
+
+.auth-loading {
+  color: #647087;
+  text-align: center;
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin: 24px 0 18px;
+}
+
+.auth-tab {
+  min-height: 40px;
+  border: 1px solid #ccd5e3;
+  border-radius: 9px;
+  background: #f7f9fc;
+  color: #59667c;
+  font-weight: 750;
+}
+
+.auth-tab.active {
+  border-color: #5878e8;
+  background: #edf1ff;
+  color: #3859c7;
+}
+
+.auth-form {
+  display: grid;
+  gap: 15px;
+}
+
+.auth-form button {
+  margin-top: 4px;
+}
+
+.auth-message {
+  min-height: 1.4em;
+  margin: 16px 0 0;
+  color: #a12e26;
+  font-size: 0.84rem;
+}
+
+.auth-message[data-kind="success"] {
+  color: #21794e;
+}
+
 button,
 input,
 select,
@@ -65,11 +132,40 @@ textarea:disabled {
 
 .workspace-context {
   display: grid;
-  grid-template-columns: minmax(190px, 0.7fr) minmax(260px, 1.2fr) minmax(120px, auto);
+  grid-template-columns: minmax(260px, 1.2fr) minmax(120px, auto);
   align-items: end;
   gap: 14px;
   padding: 16px 30px;
   border-top: 0;
+}
+
+.topbar-actions,
+.account-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topbar-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.account-summary {
+  display: grid;
+  gap: 2px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: #f2f5fa;
+}
+
+.account-summary span {
+  color: #738097;
+  font-size: 0.68rem;
+}
+
+.account-summary strong {
+  font-size: 0.84rem;
 }
 
 .workspace-context .security-note {

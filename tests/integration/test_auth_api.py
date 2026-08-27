@@ -91,9 +91,11 @@ class AuthApiTests(unittest.TestCase):
         )
 
     def test_register_login_cookie_and_me(self):
+        self.assertEqual(self.client.get("/api/v1/auth/me").status_code, 401)
         registered = self.register()
         self.assertEqual(registered.status_code, 201, registered.text)
         self.assertNotIn("password", registered.text.casefold())
+        self.assertIsNone(self.client.cookies.get("test_session"))
         logged_in = self.login()
         self.assertEqual(logged_in.status_code, 200, logged_in.text)
         cookies = logged_in.headers.get_list("set-cookie")
@@ -103,9 +105,18 @@ class AuthApiTests(unittest.TestCase):
         self.assertIn("SameSite=lax", session_cookie)
         self.assertNotIn("HttpOnly", csrf_cookie)
         self.assertNotIn("session_token", logged_in.text)
+        self.assertEqual(
+            logged_in.headers["X-ResearchFlow-CSRF-Cookie"],
+            "test_csrf",
+        )
+        self.assertEqual(
+            logged_in.headers["X-ResearchFlow-CSRF-Header"],
+            "X-CSRF-Token",
+        )
         me = self.client.get("/api/v1/auth/me")
         self.assertEqual(me.status_code, 200)
         self.assertEqual(me.json()["username"], "alice")
+        self.assertEqual(me.headers["X-ResearchFlow-CSRF-Cookie"], "test_csrf")
 
     def test_duplicate_and_bad_login_have_safe_responses(self):
         self.assertEqual(self.register().status_code, 201)
